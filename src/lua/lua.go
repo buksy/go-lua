@@ -23,24 +23,23 @@ package lua
 */
 import "C"
 
-import(
-	"unsafe"
+import (
 	"reflect"
+	"unsafe"
 )
 
-
-type Lib int;
+type Lib int
 
 const (
-	OS 		Lib = 5
-	MATH 	Lib = 8
+	OS      Lib = 5
+	MATH    Lib = 8
 	PACKAGE Lib = 1
-	IO		Lib	= 4
-	TABLE	Lib = 3
-	STRING	Lib = 6
-	DEBUG	Lib = 9
-	BASE 	Lib = 0
-) 
+	IO      Lib = 4
+	TABLE   Lib = 3
+	STRING  Lib = 6
+	DEBUG   Lib = 9
+	BASE    Lib = 0
+)
 
 type State struct {
 	s *C.lua_State
@@ -52,145 +51,144 @@ type wrapper struct {
 }
 
 type luaError struct {
-	errStr string;
+	errStr string
 }
 
 func (err *luaError) Error() string {
 	return err.errStr
 }
 
-func NewState(loadDefaultLibs bool) (*State ,error){
-	L := new (State)
+func NewState(loadDefaultLibs bool) (*State, error) {
+	L := new(State)
 	L.s = C.luaL_newstate()
 	if L.s != nil {
-		C.initNewState(L.s)
-		if (loadDefaultLibs) {
-			L.OpenLib (BASE)
-			L.OpenLib (OS)
-			L.OpenLib (IO)
-			L.OpenLib (PACKAGE)
-			L.OpenLib (MATH)
-			L.OpenLib (STRING)
-			L.OpenLib (TABLE)
-			L.OpenLib (DEBUG)
+		C.initNewState(L.s, unsafe.Pointer(L))
+		if loadDefaultLibs {
+			L.OpenLib(BASE)
+			L.OpenLib(OS)
+			L.OpenLib(IO)
+			L.OpenLib(PACKAGE)
+			L.OpenLib(MATH)
+			L.OpenLib(STRING)
+			L.OpenLib(TABLE)
+			L.OpenLib(DEBUG)
 		}
-		return L, nil	
+		return L, nil
 	}
-	err := new (luaError)
+	err := new(luaError)
 	err.errStr = "Could not initialize the lua environment"
 	return nil, err
 }
 
 func (L *State) Close() {
-	C.lua_close (L.s)
+	C.deinitState(L.s)
+	C.lua_close(L.s)
 }
 
-func (L *State ) OpenLib(l Lib) {
-	C.openDefaultLib(L.s ,C.int(int(l)))
+func (L *State) OpenLib(l Lib) {
+	C.openDefaultLib(L.s, C.int(int(l)))
 }
 
 // Check methods
-func (L *State) IsNil(index int) bool		{
-	 return int(C.lua_type(L.s, C.int(index))) == C.LUA_TNIL 
+func (L *State) IsNil(index int) bool {
+	return int(C.lua_type(L.s, C.int(index))) == C.LUA_TNIL
 }
 
-func (L *State) IsNone(index int) bool		{
-	 return int(C.lua_type(L.s, C.int(index))) == C.LUA_TNONE 
+func (L *State) IsNone(index int) bool {
+	return int(C.lua_type(L.s, C.int(index))) == C.LUA_TNONE
 }
 
-func (L *State) IsNoneOrNil(index int) bool	{ 
+func (L *State) IsNoneOrNil(index int) bool {
 	return int(C.lua_type(L.s, C.int(index))) <= 0
 }
 
-func (L *State) IsNumber(index int) bool	{
-	 return C.lua_isnumber(L.s, C.int(index)) == 1 
- }
-
-func (L *State) IsString(index int) bool	{
-	return C.lua_isstring(L.s, C.int(index)) == 1 
+func (L *State) IsNumber(index int) bool {
+	return C.lua_isnumber(L.s, C.int(index)) == 1
 }
 
-func (L *State) IsTable(index int) bool		{
-	return int(C.lua_type(L.s, C.int(index))) == C.LUA_TTABLE 
+func (L *State) IsString(index int) bool {
+	return C.lua_isstring(L.s, C.int(index)) == 1
 }
 
-func (L *State) IsUserdata(index int) bool	{
-	return C.lua_isuserdata(L.s, C.int(index)) == 1 
+func (L *State) IsTable(index int) bool {
+	return int(C.lua_type(L.s, C.int(index))) == C.LUA_TTABLE
 }
 
-func (L *State) IsBoolean(index int) bool 	{
-	return int(C.lua_type(L.s, C.int(index))) == C.LUA_TBOOLEAN 
+func (L *State) IsUserdata(index int) bool {
+	return C.lua_isuserdata(L.s, C.int(index)) == 1
 }
 
+func (L *State) IsBoolean(index int) bool {
+	return int(C.lua_type(L.s, C.int(index))) == C.LUA_TBOOLEAN
+}
 
-// Push methods 
+// Push methods
 func (L *State) PushBoolean(b bool) {
-	var bint int;
+	var bint int
 	if b {
-		bint = 1;
+		bint = 1
 	} else {
-		bint = 0;
+		bint = 0
 	}
-	C.lua_pushboolean(L.s, C.int(bint));
+	C.lua_pushboolean(L.s, C.int(bint))
 }
 
 func (L *State) PushString(str string) {
-	C.lua_pushstring(L.s,C.CString(str));
+	C.lua_pushstring(L.s, C.CString(str))
 }
 
 func (L *State) PushInteger(n int) {
-	C.lua_pushinteger(L.s,C.lua_Integer(n));
+	C.lua_pushinteger(L.s, C.lua_Integer(n))
 }
 
 func (L *State) PushNil() {
-	C.lua_pushnil(L.s);
+	C.lua_pushnil(L.s)
 }
 
 func (L *State) PushNumber(n float64) {
-	C.lua_pushnumber(L.s, C.lua_Number(n));
+	C.lua_pushnumber(L.s, C.lua_Number(n))
 }
 
 func (L *State) PushValue(index int) {
-	C.lua_pushvalue(L.s, C.int(index));
+	C.lua_pushvalue(L.s, C.int(index))
 }
 
-func (L *State ) PushInterface(val interface{} ) {
-	b := reflect.ValueOf(val).Kind() == reflect.Ptr
-	print (b)
+func (L *State) PushInterface(val interface{}) {
+//	b := reflect.ValueOf(val).Kind() == reflect.Ptr
+//	print(b)
 	var w wrapper
 	w.v = val
-	w.n = "gihan"
-	C.pushObject (L.s, unsafe.Pointer(&w))
+	C.pushObject(L.s, unsafe.Pointer(&w))
 }
 
 func (L *State) ToBoolean(index int) bool {
-	return C.lua_toboolean(L.s, C.int(index)) != 0;
+	return C.lua_toboolean(L.s, C.int(index)) != 0
 }
 
 func (L *State) ToString(index int) string {
-	return C.GoString(C.toString(L.s,C.int(index)));
+	return C.GoString(C.toString(L.s, C.int(index)))
 }
 
 func (L *State) ToInteger(index int) int {
 	var i C.int
-	return int(C.lua_tointegerx(L.s, C.int(index), &i));
+	return int(C.lua_tointegerx(L.s, C.int(index), &i))
 }
 
 func (L *State) ToNumber(index int) float64 {
 	var i C.int
-	return float64(C.lua_tonumberx(L.s, C.int(index), &i));
+	return float64(C.lua_tonumberx(L.s, C.int(index), &i))
 }
 
 func (L *State) Type(index int) int {
-	return int(C.lua_type(L.s, C.int(index)));
+	return int(C.lua_type(L.s, C.int(index)))
 }
 
 func (L *State) Typename(tp int) string {
-	return C.GoString(C.lua_typename(L.s, C.int(tp)));
+	return C.GoString(C.lua_typename(L.s, C.int(tp)))
 }
 
 func (L *State) SetField(index int, k string) {
-	C.lua_setfield(L.s, C.int(index), C.CString(k));
+	C.lua_setfield(L.s, C.int(index), C.CString(k))
 }
 
 func (L *State) GetField(index int, k string) {
@@ -201,12 +199,12 @@ func (L *State) SetGlobal(name string) {
 	C.lua_setglobal(L.s, C.CString(name))
 }
 
-func (L *State) GetGlobal(name string) int{
+func (L *State) GetGlobal(name string) int {
 	return int(C.lua_getglobal(L.s, C.CString(name)))
 }
 
 func (L *State) SetMetaTable(index int) {
-	C.lua_setmetatable(L.s, C.int(index));
+	C.lua_setmetatable(L.s, C.int(index))
 }
 
 func (L *State) GetMetaTable(index int) bool {
@@ -214,133 +212,127 @@ func (L *State) GetMetaTable(index int) bool {
 }
 
 func (L *State) SetTable(index int) {
-	C.lua_settable(L.s, C.int(index));
+	C.lua_settable(L.s, C.int(index))
 }
 
-func (L *State) GetTable(index int)	{
-	 C.lua_gettable(L.s, C.int(index)) 
- }
+func (L *State) GetTable(index int) {
+	C.lua_gettable(L.s, C.int(index))
+}
 
 func (L *State) SetTop(index int) {
-	C.lua_settop(L.s, C.int(index));
+	C.lua_settop(L.s, C.int(index))
 }
 
 func (L *State) Pop(n int) {
-	C.lua_settop(L.s, C.int(-n-1));
+	C.lua_settop(L.s, C.int(-n-1))
 }
 
 func (L *State) GetTop() int {
-	 return int(C.lua_gettop(L.s)) 
+	return int(C.lua_gettop(L.s))
 }
 
-// Loading the chunk 
+// Loading the chunk
 
-func (L *State) LoadCodeString ( code string) error{
-	
+func (L *State) LoadCodeString(code string) error {
+
 	err := int(C.loadCodeSegment(L.s, C.CString(code)))
-	
-	if (err != 0 ) {
+
+	if err != 0 {
 		e := new(luaError)
-		e.errStr = L.ToString(-1);
-        L.Pop(1);  /* pop error message from the stack */
-        return e
+		e.errStr = L.ToString(-1)
+		L.Pop(1) /* pop error message from the stack */
+		return e
 	}
 	return nil
-} 
+}
 
 func (L *State) PCall(nargs int, nresults int) error {
-	err := int(C.callCode(L.s, C.int(nargs), C.int(nresults)));
-	if (err != 0 ) {
+	err := int(C.callCode(L.s, C.int(nargs), C.int(nresults)))
+	if err != 0 {
 		e := new(luaError)
-		e.errStr = L.ToString(-1);
-        L.Pop(1);  /* pop error message from the stack */
-        return e
+		e.errStr = L.ToString(-1)
+		L.Pop(1) /* pop error message from the stack */
+		return e
 	}
 	return nil
 }
 
-func (L *State) Error( err string ) {
+func (L *State) Error(err string) {
 	L.PushString(err)
 	C.lua_error(L.s)
 }
 
 //export go_callback_getter
-func go_callback_getter(obj unsafe.Pointer, s *C.lua_State) C.int {
+func go_callback_getter(obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
 	var ret int
 	p := *(*wrapper)(obj)
 	val := p.v
-	//To do any reflection we need to figure out the type 
-	temState := &State{}
-	temState.s = s
-	
-	
+	//To do any reflection we need to figure out the type
+	temState := (*State)(go_sate)
+
 	itype := reflect.ValueOf(val).Elem()
 	if temState.IsString(2) {
 		lookFor := temState.ToString(2)
 		field := itype.FieldByName(lookFor)
 		if !field.IsValid() {
 			method := itype.MethodByName(lookFor)
-			if !method.IsValid(){
-				temState.Error("No filed/method named " + lookFor +" found")
-			}else {
+			if !method.IsValid() {
+				temState.Error("No filed/method named " + lookFor + " found")
+			} else {
 				//TODO: work on method reflection
 			}
-		}else {
+		} else {
 			temState.SetTop(0)
 			ret = 1
 			get_filed_value(field, temState)
 		}
-	}else {
+	} else {
 		temState.Error("No valid filed/method specified")
 	}
-	temState.s = nil
 	return C.int(ret)
-} 
+}
 
-// Fix the types 
-func get_filed_value (v reflect.Value, L *State) {
+// Fix the types
+func get_filed_value(v reflect.Value, L *State) {
 	kind := v.Kind()
-	switch (kind) {
-		case reflect.String:
-			L.PushString(v.String())
+	switch kind {
+	case reflect.String:
+		L.PushString(v.String())
 		break
 	}
 }
 
 //export go_callback_setter
-func go_callback_setter(obj unsafe.Pointer, s *C.lua_State) C.int {
+func go_callback_setter(obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
 	var ret int
 	p := *(*wrapper)(obj)
 	val := p.v
-	//To do any reflection we need to figure out the type 
-	temState := &State{}
-	temState.s = s
-	
+	//To do any reflection we need to figure out the type
+	temState := (*State)(go_sate)
+
 	itype := reflect.ValueOf(val).Elem()
 	if temState.IsString(2) {
 		lookFor := temState.ToString(2)
 		field := itype.FieldByName(lookFor)
 		if !field.IsValid() || !field.CanSet() {
-			temState.Error("No Filed named \"" + lookFor +"\" found")
-		}else {
+			temState.Error("No Filed named \"" + lookFor + "\" found")
+		} else {
 			ret = 0
 			set_filed_value(field, temState)
 			temState.SetTop(0)
 		}
-	}else {
+	} else {
 		temState.Error("No valid filed/method specified")
 	}
-	temState.s = nil
 	return C.int(ret)
-} 
+}
 
-// Fix the types 
-func set_filed_value (v reflect.Value, L *State) {
+// Fix the types
+func set_filed_value(v reflect.Value, L *State) {
 	kind := v.Kind()
-	switch (kind) {
-		case reflect.String:
-			v.SetString(L.ToString(3))
+	switch kind {
+	case reflect.String:
+		v.SetString(L.ToString(3))
 		break
 	}
 }
-
