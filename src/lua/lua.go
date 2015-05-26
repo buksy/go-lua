@@ -26,6 +26,7 @@ import "C"
 import (
 	"reflect"
 	"unsafe"
+	//	"strconv"
 )
 
 type Lib int
@@ -45,13 +46,38 @@ type State struct {
 	s *C.lua_State
 }
 
+type GOLuaFunction interface {
+	Invoke(L *State) int
+}
+
 type wrapper struct {
-	v interface{}
-	n string
+	v          interface{}
+	obj_type   reflect.Kind
+	pointer    bool
+	isFunction bool
 }
 
 type luaError struct {
 	errStr string
+}
+
+type methodInvoker struct {
+	method reflect.Value
+}
+
+func (m *methodInvoker) Invoke(L *State) int {
+	in := make([]reflect.Value, m.method.Type().NumIn())
+	var ret int
+	if L.GetTop() >= len(in) {
+		out := m.method.Call(in)
+		ret = len(out)
+		print("method Invoked ")
+	} else {
+		print("method Invoked Failed not enough params")
+		return 0
+	}
+
+	return ret
 }
 
 func (err *luaError) Error() string {
@@ -154,10 +180,19 @@ func (L *State) PushValue(index int) {
 }
 
 func (L *State) PushInterface(val interface{}) {
-//	b := reflect.ValueOf(val).Kind() == reflect.Ptr
-//	print(b)
 	var w wrapper
 	w.v = val
+	w.pointer = reflect.ValueOf(val).Kind() == reflect.Ptr
+	var k reflect.Kind
+	if w.pointer {
+		k = reflect.ValueOf(val).Elem().Kind()
+	} else {
+		k = reflect.ValueOf(val).Kind()
+	}
+	w.obj_type = k
+	if (k != reflect.Slice) && (k != reflect.Struct) && (k != reflect.Map) {
+		panic("The pushed interface can only be a Slice, Map or Struct")
+	}
 	C.pushObject(L.s, unsafe.Pointer(&w))
 }
 
@@ -258,36 +293,71 @@ func (L *State) PCall(nargs int, nresults int) error {
 }
 
 func (L *State) Error(err string) {
-	L.PushString(err)
-	C.lua_error(L.s)
+	C.doLuaError(L.s, C.CString(err))
 }
 
 //export go_callback_getter
 func go_callback_getter(obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
 	var ret int
 	p := *(*wrapper)(obj)
-	val := p.v
-	//To do any reflection we need to figure out the type
-	temState := (*State)(go_sate)
+	if !p.isFunction {
+		val := p.v
 
-	itype := reflect.ValueOf(val).Elem()
-	if temState.IsString(2) {
-		lookFor := temState.ToString(2)
-		field := itype.FieldByName(lookFor)
-		if !field.IsValid() {
-			method := itype.MethodByName(lookFor)
-			if !method.IsValid() {
-				temState.Error("No filed/method named " + lookFor + " found")
+		//To do any reflection we need to figure out the type
+		temState := (*State)(go_sate)
+
+		var itype reflect.Value
+		if p.pointer {
+			itype = reflect.ValueOf(val).Elem()
+		} else {
+			itype = reflect.ValueOf(val)
+		}
+
+		if temState.IsString(2) {
+			lookFor := temState.ToString(2)
+			print("Looking for 1 " + lookFor)
+			field := itype.FieldByName(lookFor)
+			//		print ("Looking for 2"+lookFor)
+			if !field.IsValid() {
+				//			print ("Looking for 3"+lookFor)
+				var ptr reflect.Value
+				var value reflect.Value
+				var method reflect.Value
+
+				if p.pointer {
+					ptr = reflect.ValueOf(val)
+					value = ptr.Elem()
+				} else {
+					ptr = reflect.New(reflect.TypeOf(val))
+					temp := ptr.Elem()
+					value = reflect.ValueOf(val)
+					temp.Set(value)
+				}
+
+				//Check the method on the pointer
+				method = ptr.MethodByName(lookFor)
+				if method.IsValid() {
+					return C.int(handle_method(method, temState))
+				} else {
+					method = value.MethodByName(lookFor)
+					if method.IsValid() {
+						return C.int(handle_method(method, temState))
+					} else {
+						// Need to find a way to sort this out luaL_error does a longjmp which GO does not like and
+						// Get a split stack panic
+						// Given that GO threads are not based on ptheads its bit dangarous as well for now I am going push nil here
+					}
+				}
 			} else {
-				//TODO: work on method reflection
+				temState.SetTop(0)
+				ret = 1
+				get_filed_value(field, temState)
 			}
 		} else {
-			temState.SetTop(0)
-			ret = 1
-			get_filed_value(field, temState)
+			// Need to find a way to sort this out luaL_error does a longjmp which GO does not like and
+			// Get a split stack panic
+			// Given that GO threads are not based on ptheads its bit dangarous as well for now I am going push nil here
 		}
-	} else {
-		temState.Error("No valid filed/method specified")
 	}
 	return C.int(ret)
 }
@@ -306,23 +376,35 @@ func get_filed_value(v reflect.Value, L *State) {
 func go_callback_setter(obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
 	var ret int
 	p := *(*wrapper)(obj)
-	val := p.v
-	//To do any reflection we need to figure out the type
-	temState := (*State)(go_sate)
+	if !p.isFunction {
+		val := p.v
 
-	itype := reflect.ValueOf(val).Elem()
-	if temState.IsString(2) {
-		lookFor := temState.ToString(2)
-		field := itype.FieldByName(lookFor)
-		if !field.IsValid() || !field.CanSet() {
-			temState.Error("No Filed named \"" + lookFor + "\" found")
+		ispointer := reflect.ValueOf(val).Kind() == reflect.Ptr
+
+		//To do any reflection we need to figure out the type
+		temState := (*State)(go_sate)
+
+		var itype reflect.Value
+		if ispointer {
+			itype = reflect.ValueOf(val).Elem()
 		} else {
-			ret = 0
-			set_filed_value(field, temState)
-			temState.SetTop(0)
+			itype = reflect.ValueOf(val)
 		}
-	} else {
-		temState.Error("No valid filed/method specified")
+
+		if temState.IsString(2) {
+			lookFor := temState.ToString(2)
+			field := itype.FieldByName(lookFor)
+			if !field.IsValid() || !field.CanSet() {
+				//			temState.Error("No Filed named \"" + lookFor + "\" found")
+				temState.PushNil()
+			} else {
+				ret = 0
+				set_filed_value(field, temState)
+				temState.SetTop(0)
+			}
+		} else {
+			//		temState.Error("No valid filed/method specified")
+		}
 	}
 	return C.int(ret)
 }
@@ -334,5 +416,31 @@ func set_filed_value(v reflect.Value, L *State) {
 	case reflect.String:
 		v.SetString(L.ToString(3))
 		break
+
 	}
+}
+
+//export go_callback_method
+func go_callback_method(obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
+	var ret int
+	//To do any reflection we need to figure out the type
+	temState := (*State)(go_sate)
+	p := *(*wrapper)(obj)
+	if p.isFunction {
+		f := p.v.(GOLuaFunction)
+		ret = f.Invoke(temState)
+		//		print ("Call getting invoked "+temState.ToString(2))
+	}
+	return C.int(ret)
+}
+
+func handle_method(method reflect.Value, L *State) int {
+	ic := new(methodInvoker)
+	ic.method = method
+	var w wrapper
+	w.v = ic
+	w.isFunction = true
+	L.SetTop(0)
+	C.pushObject(L.s, unsafe.Pointer(&w))
+	return 1
 }

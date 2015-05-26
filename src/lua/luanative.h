@@ -35,4 +35,7 @@ void pushObject(lua_State *L, void *obj) ;
 void initNewState(lua_State *L, void *go_stae) ;
 
 void deinitState (lua_State *L);
+
+void doLuaError (lua_State *L, const char * errorMsg);
+
 #endif
