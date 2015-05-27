@@ -99,6 +99,14 @@ void pushObject(lua_State *L, void *obj) {
 	lua_setmetatable (L, -2);
 }
 
+void pushFunction(lua_State *L, void *obj) {
+	GoObject *o = lua_newuserdata (L, sizeof(GoObject));
+	o->go = obj;
+	luaL_getmetatable (L, GO_LUA_OBJECT);
+	lua_setmetatable (L, -2);
+//	fprintf(stderr, "go_index Looking for %d\n",lua_gettop(L));
+}
+
 static int gc_goobj (lua_State * L) {
 	GoObject *obj = (GoObject *) luaL_checkudata (L, 1, GO_LUA_OBJECT);
 	if (obj) {
@@ -153,15 +161,15 @@ static int go_call (lua_State * L) {
 	GoObject *obj = (GoObject *) luaL_checkudata (L, 1, GO_LUA_OBJECT);
 	int ret = 0;
 	if (obj) {
-//		fprintf(stderr, " go_new_index Looking for %s\n",toString(L, 2));
-		lua_pop (L, 1);
+//		fprintf(stderr, " go_new_index Looking for %d\n",lua_gettop(L));
+		lua_remove(L,1);
 		ret = go_callback_method(obj->go, go_sate->go);
 	}
 	return ret;
 }
 
 static int go_lua_atpanic(lua_State *L) {
-	fprintf(stderr, " hahaha Panic %s",toString(L, -1));
+//	fprintf(stderr, " hahaha Panic %s",toString(L, -1));
 	return 0;
 }
 

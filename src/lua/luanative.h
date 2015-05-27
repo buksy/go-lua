@@ -32,6 +32,8 @@ int loadCodeSegment(lua_State *L, const char *code);
 
 void pushObject(lua_State *L, void *obj) ;
 
+void pushFunction(lua_State *L, void *obj) ;
+
 void initNewState(lua_State *L, void *go_stae) ;
 
 void deinitState (lua_State *L);

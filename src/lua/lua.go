@@ -16,9 +16,10 @@
  */
 package lua
 
-//#cgo LDFLAGS: -llua
+//#cgo LDFLAGS: -llua -lm -ldl
 /*
 #include <stdio.h>
+#include <stdlib.h>
 #include "luanative.h"
 */
 import "C"
@@ -53,8 +54,9 @@ type GOLuaFunction interface {
 type wrapper struct {
 	v          interface{}
 	obj_type   reflect.Kind
-	pointer    bool
-	isFunction bool
+	pointer    int
+	isFunction int
+	name       string
 }
 
 type luaError struct {
@@ -69,9 +71,19 @@ func (m *methodInvoker) Invoke(L *State) int {
 	in := make([]reflect.Value, m.method.Type().NumIn())
 	var ret int
 	if L.GetTop() >= len(in) {
+		funcT := m.method.Type()
+		for j := 0; j < len(in); j++ {
+			t := funcT.In(j)
+			d := reflect.New(t)
+			luaToGo(L, d.Elem(), (j + 1))
+			in[j] = d.Elem()
+		}
 		out := m.method.Call(in)
 		ret = len(out)
-		print("method Invoked ")
+		L.SetTop(0)
+		for i := 0; i < ret; i++ {
+			goToLua(L, out[i], (i + 1))
+		}
 	} else {
 		print("method Invoked Failed not enough params")
 		return 0
@@ -160,11 +172,13 @@ func (L *State) PushBoolean(b bool) {
 }
 
 func (L *State) PushString(str string) {
-	C.lua_pushstring(L.s, C.CString(str))
+	cstr := C.CString(str)
+	defer C.free(unsafe.Pointer(cstr))
+	C.lua_pushstring(L.s, cstr)
 }
 
 func (L *State) PushInteger(n int) {
-	C.lua_pushinteger(L.s, C.lua_Integer(n))
+	C.lua_pushinteger(L.s, C.lua_Integer(C.int(n)))
 }
 
 func (L *State) PushNil() {
@@ -182,18 +196,30 @@ func (L *State) PushValue(index int) {
 func (L *State) PushInterface(val interface{}) {
 	var w wrapper
 	w.v = val
-	w.pointer = reflect.ValueOf(val).Kind() == reflect.Ptr
+	w.pointer = 0
+	if reflect.ValueOf(val).Kind() == reflect.Ptr {
+		w.pointer = 1
+	}
+	//	print (val)
+	//	w.name = "Test"
+	w.isFunction = 0
 	var k reflect.Kind
-	if w.pointer {
+	if w.pointer == 1 {
+		//		print ("Pointer ....")
 		k = reflect.ValueOf(val).Elem().Kind()
 	} else {
+		//		print ("Not Pointer")
 		k = reflect.ValueOf(val).Kind()
 	}
 	w.obj_type = k
 	if (k != reflect.Slice) && (k != reflect.Struct) && (k != reflect.Map) {
 		panic("The pushed interface can only be a Slice, Map or Struct")
 	}
-	C.pushObject(L.s, unsafe.Pointer(&w))
+	//	print ("---------------")
+	//	print (reflect.ValueOf(&w).Pointer())
+	//	C.pushObject(L.s, unsafe.Pointer(&w))
+	C.pushObject(L.s, unsafe.Pointer(reflect.ValueOf(&w).Pointer()))
+	//	print (w.pointer)
 }
 
 func (L *State) ToBoolean(index int) bool {
@@ -223,19 +249,27 @@ func (L *State) Typename(tp int) string {
 }
 
 func (L *State) SetField(index int, k string) {
-	C.lua_setfield(L.s, C.int(index), C.CString(k))
+	cstr := C.CString(k)
+	defer C.free(unsafe.Pointer(cstr))
+	C.lua_setfield(L.s, C.int(index), cstr)
 }
 
 func (L *State) GetField(index int, k string) {
-	C.lua_getfield(L.s, C.int(index), C.CString(k))
+	cstr := C.CString(k)
+	defer C.free(unsafe.Pointer(cstr))
+	C.lua_getfield(L.s, C.int(index), cstr)
 }
 
 func (L *State) SetGlobal(name string) {
-	C.lua_setglobal(L.s, C.CString(name))
+	cstr := C.CString(name)
+	defer C.free(unsafe.Pointer(cstr))
+	C.lua_setglobal(L.s, cstr)
 }
 
 func (L *State) GetGlobal(name string) int {
-	return int(C.lua_getglobal(L.s, C.CString(name)))
+	cstr := C.CString(name)
+	defer C.free(unsafe.Pointer(cstr))
+	return int(C.lua_getglobal(L.s, cstr))
 }
 
 func (L *State) SetMetaTable(index int) {
@@ -246,6 +280,15 @@ func (L *State) GetMetaTable(index int) bool {
 	return C.lua_getmetatable(L.s, C.int(index)) != 0
 }
 
+//Table functions
+func (L *State) NewTable() {
+	C.lua_createtable(L.s, 0, 0)
+}
+
+func (L *State) Next(index int) int {
+	return int(C.lua_next(L.s, C.int(index)))
+}
+
 func (L *State) SetTable(index int) {
 	C.lua_settable(L.s, C.int(index))
 }
@@ -254,6 +297,7 @@ func (L *State) GetTable(index int) {
 	C.lua_gettable(L.s, C.int(index))
 }
 
+// Stack functions
 func (L *State) SetTop(index int) {
 	C.lua_settop(L.s, C.int(index))
 }
@@ -269,8 +313,10 @@ func (L *State) GetTop() int {
 // Loading the chunk
 
 func (L *State) LoadCodeString(code string) error {
+	cstr := C.CString(code)
+	defer C.free(unsafe.Pointer(cstr))
 
-	err := int(C.loadCodeSegment(L.s, C.CString(code)))
+	err := int(C.loadCodeSegment(L.s, cstr))
 
 	if err != 0 {
 		e := new(luaError)
@@ -281,41 +327,56 @@ func (L *State) LoadCodeString(code string) error {
 	return nil
 }
 
-func (L *State) PCall(nargs int, nresults int) error {
+func (L *State) PCall(nargs int, nresults int) (e error) {
+
+	//	defer func() {
+	//		if pa := recover(); pa != nil{
+	//			print ( pa.(error).Error())
+	//			e := new(luaError)
+	//			e.errStr = pa.(error).Error()
+	//		}
+	//	}()
 	err := int(C.callCode(L.s, C.int(nargs), C.int(nresults)))
 	if err != 0 {
 		e := new(luaError)
 		e.errStr = L.ToString(-1)
 		L.Pop(1) /* pop error message from the stack */
-		return e
+
 	}
-	return nil
+	return
 }
 
 func (L *State) Error(err string) {
-	C.doLuaError(L.s, C.CString(err))
+	str := C.CString(err)
+	defer C.free(unsafe.Pointer(str))
+	C.doLuaError(L.s, str)
 }
 
 //export go_callback_getter
 func go_callback_getter(obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
 	var ret int
-	p := *(*wrapper)(obj)
-	if !p.isFunction {
+	//	print ((*wrapper)(obj).isFunction)
+	p := (*wrapper)(obj)
+	//	print (p)
+	if p.isFunction == 0 {
 		val := p.v
-
+		//		print (val)
 		//To do any reflection we need to figure out the type
 		temState := (*State)(go_sate)
 
 		var itype reflect.Value
-		if p.pointer {
+		if p.pointer == 1 {
+			//			print ("Is pointer")
 			itype = reflect.ValueOf(val).Elem()
 		} else {
+			//			print ("not pointer")
 			itype = reflect.ValueOf(val)
+
 		}
 
 		if temState.IsString(2) {
 			lookFor := temState.ToString(2)
-			print("Looking for 1 " + lookFor)
+			//			print("Looking for 1 " + lookFor)
 			field := itype.FieldByName(lookFor)
 			//		print ("Looking for 2"+lookFor)
 			if !field.IsValid() {
@@ -324,7 +385,7 @@ func go_callback_getter(obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
 				var value reflect.Value
 				var method reflect.Value
 
-				if p.pointer {
+				if p.pointer == 1 {
 					ptr = reflect.ValueOf(val)
 					value = ptr.Elem()
 				} else {
@@ -346,12 +407,13 @@ func go_callback_getter(obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
 						// Need to find a way to sort this out luaL_error does a longjmp which GO does not like and
 						// Get a split stack panic
 						// Given that GO threads are not based on ptheads its bit dangarous as well for now I am going push nil here
+						temState.Error("No method found")
 					}
 				}
 			} else {
 				temState.SetTop(0)
 				ret = 1
-				get_filed_value(field, temState)
+				goToLua(temState, field, 1)
 			}
 		} else {
 			// Need to find a way to sort this out luaL_error does a longjmp which GO does not like and
@@ -362,30 +424,18 @@ func go_callback_getter(obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
 	return C.int(ret)
 }
 
-// Fix the types
-func get_filed_value(v reflect.Value, L *State) {
-	kind := v.Kind()
-	switch kind {
-	case reflect.String:
-		L.PushString(v.String())
-		break
-	}
-}
-
 //export go_callback_setter
 func go_callback_setter(obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
 	var ret int
-	p := *(*wrapper)(obj)
-	if !p.isFunction {
+	p := (*wrapper)(obj)
+	if p.isFunction != 1 {
 		val := p.v
-
-		ispointer := reflect.ValueOf(val).Kind() == reflect.Ptr
 
 		//To do any reflection we need to figure out the type
 		temState := (*State)(go_sate)
 
 		var itype reflect.Value
-		if ispointer {
+		if p.pointer == 1 {
 			itype = reflect.ValueOf(val).Elem()
 		} else {
 			itype = reflect.ValueOf(val)
@@ -403,7 +453,7 @@ func go_callback_setter(obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
 				temState.SetTop(0)
 			}
 		} else {
-			//		temState.Error("No valid filed/method specified")
+			temState.Error("No valid filed/method specified")
 		}
 	}
 	return C.int(ret)
@@ -423,13 +473,11 @@ func set_filed_value(v reflect.Value, L *State) {
 //export go_callback_method
 func go_callback_method(obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
 	var ret int
-	//To do any reflection we need to figure out the type
 	temState := (*State)(go_sate)
-	p := *(*wrapper)(obj)
-	if p.isFunction {
+	p := (*wrapper)(obj)
+	if p.isFunction == 1 {
 		f := p.v.(GOLuaFunction)
 		ret = f.Invoke(temState)
-		//		print ("Call getting invoked "+temState.ToString(2))
 	}
 	return C.int(ret)
 }
@@ -439,8 +487,101 @@ func handle_method(method reflect.Value, L *State) int {
 	ic.method = method
 	var w wrapper
 	w.v = ic
-	w.isFunction = true
+	w.isFunction = 1
+	w.pointer = 0
+	w.obj_type = reflect.Func
 	L.SetTop(0)
-	C.pushObject(L.s, unsafe.Pointer(&w))
+	C.pushFunction(L.s, unsafe.Pointer(reflect.ValueOf(&w).Pointer()))
 	return 1
+}
+
+func goToLua(L *State, val reflect.Value, idx int) {
+	if !val.IsValid() {
+		L.PushNil()
+		return
+	}
+	t := val.Type()
+	if t.Kind() == reflect.Interface && !val.IsNil() { // unbox interfaces!
+		val = reflect.ValueOf(val.Interface())
+		t = val.Type()
+	}
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	kind := t.Kind()
+
+	//	// underlying type is 'primitive' ? wrap it as a proxy!
+	//	if isPrimitiveDerived(t, kind) != nil {
+	//		makeValueProxy(L, val, cINTERFACE_META)
+	//		return
+	//	}
+
+	switch kind {
+	case reflect.Float64, reflect.Float32:
+		{
+			L.PushNumber(val.Float())
+		}
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		{
+			L.PushNumber(float64(val.Int()))
+		}
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		{
+			L.PushNumber(float64(val.Uint()))
+		}
+	case reflect.String:
+		{
+			L.PushString(val.String())
+		}
+	case reflect.Bool:
+		{
+			L.PushBoolean(val.Bool())
+		}
+	case reflect.Slice, reflect.Map, reflect.Struct:
+		{
+			L.PushInterface(val)
+		}
+
+	default:
+		{
+			if val.IsNil() {
+				L.PushNil()
+			} else {
+				L.PushInterface(val)
+			}
+		}
+	}
+}
+
+func luaToGo(L *State, val reflect.Value, idx int) {
+	kind := val.Kind()
+	//	print (L.Typename(idx))
+	//	print("\n")
+	//	print (L.GetTop())
+	switch kind {
+	case reflect.String:
+		{
+			if !L.IsNil(idx) {
+				val.SetString(L.ToString(idx))
+			} else {
+				val.SetString("")
+			}
+
+		}
+	case reflect.Float64, reflect.Float32:
+		{
+			val.SetFloat(L.ToNumber(idx))
+		}
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		{
+			val.SetInt(int64(L.ToNumber(idx)))
+			//				print(idx)
+			//				print("-----------")
+			//				print(val.Int())
+		}
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		{
+			val.SetUint(uint64(L.ToNumber(idx)))
+		}
+	}
 }
