@@ -21,7 +21,8 @@
 #include "luanative.h"
 #include "_cgo_export.h"
 
-#define GO_LUA_OBJECT		"buksy.go.lua"
+#define GO_LUA_OBJECT		"buksy.go.lua.obj"
+#define GO_LUA_FUNC			"buksy.go.lua.func"
 #define GO_SATE 	  		"buksy.go.state"
 
 typedef struct GoObject {
@@ -92,19 +93,20 @@ int loadCodeSegment(lua_State *L, const char *code) {
 	return luaL_dostring (L, code);
 }
 
-void pushObject(lua_State *L, void *obj) {
+void pushObject(lua_State *L, void *obj, int add_meta_table) {
 	GoObject *o = lua_newuserdata (L, sizeof(GoObject));
 	o->go = obj;
-	luaL_getmetatable (L, GO_LUA_OBJECT);
-	lua_setmetatable (L, -2);
+	if(add_meta_table) {
+		luaL_getmetatable (L, GO_LUA_OBJECT);
+		lua_setmetatable (L, -2);
+	}
 }
 
 void pushFunction(lua_State *L, void *obj) {
 	GoObject *o = lua_newuserdata (L, sizeof(GoObject));
 	o->go = obj;
-	luaL_getmetatable (L, GO_LUA_OBJECT);
+	luaL_getmetatable (L, GO_LUA_FUNC);
 	lua_setmetatable (L, -2);
-//	fprintf(stderr, "go_index Looking for %d\n",lua_gettop(L));
 }
 
 static int gc_goobj (lua_State * L) {
@@ -158,7 +160,7 @@ static int go_call (lua_State * L) {
 
 	GoObject *go_sate = get_go_state(L);
 
-	GoObject *obj = (GoObject *) luaL_checkudata (L, 1, GO_LUA_OBJECT);
+	GoObject *obj = (GoObject *) luaL_checkudata (L, 1, GO_LUA_FUNC);
 	int ret = 0;
 	if (obj) {
 //		fprintf(stderr, " go_new_index Looking for %d\n",lua_gettop(L));
@@ -166,6 +168,11 @@ static int go_call (lua_State * L) {
 		ret = go_callback_method(obj->go, go_sate->go);
 	}
 	return ret;
+}
+
+void addDefaultGC(lua_State *L) {
+	lua_pushcfunction(L, gc_goobj);
+	lua_setfield(L, -2, "__gc");
 }
 
 static int go_lua_atpanic(lua_State *L) {
@@ -198,6 +205,12 @@ void initNewState(lua_State *L, void *go_stae) {
 	lua_pushcfunction(L, go_new_index);
 	lua_setfield(L, -2, "__newindex");
 
+
+	// Meta table for FUNC
+	luaL_newmetatable(L, GO_LUA_FUNC);
+	lua_pushboolean(L, 0);
+	lua_setfield(L, -2, "__metatable");
+
 	lua_pushcfunction(L, go_call);
 	lua_setfield(L, -2, "__call");
 }
@@ -208,5 +221,8 @@ void deinitState(lua_State *L ) {
 }
 
 void doLuaError (lua_State *L, const char * errorMsg){
-	luaL_error(L, errorMsg);
+	lua_getglobal(L, "error");
+	lua_pushstring(L, errorMsg);
+	lua_pcall(L, 1,1,0);
+//	luaL_error(L, errorMsg);
 }

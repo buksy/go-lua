@@ -7,6 +7,7 @@ import (
 )
 
 
+//Test Struct and method invocation
 type TestStruct struct {
 	Gihan string
 	Test string
@@ -23,12 +24,58 @@ func (t *TestStruct) B() string{
 	return "B"
 }
 
+// testing an exported function 
+type PrintFunc struct {
+	
+} 
+
+func (f *PrintFunc) Name() string{
+	return "myPrint"
+}
+
+func (f *PrintFunc) Invoke(L * lua.State) int{
+	print ("print from go" +L.ToString(1) +" \n")
+	return 0
+}
+
+type AddFnc struct {
+	
+} 
+
+func (f *AddFnc) Name() string{
+	return "myAdd"
+}
+
+func (f *AddFnc) Invoke(L * lua.State) int{
+	a := L.ToInteger(1) + L.ToInteger(2)
+	L.PushInteger(a)
+	return 1
+}
+
+// testing exported modules
+
+type MyModule struct {
+	
+} 
+
+func (f *MyModule) Name() string{
+	return "myModule"
+}
+
+
+func (f *MyModule) ExportedFunctions() []lua.GoExportedFunction{
+	v := []lua.GoExportedFunction{new(PrintFunc), new (AddFnc)}
+	return v
+}
+
 func main() {
 	L, err := lua.NewState (true)
 	if (err == nil) {
 //		err = L.LoadCodeString ("local a = 10; return a + 20")
 //		err = L.LoadCodeString ("function test(n) return n*n*n end")
-		err = L.LoadCodeString ("function test(p)  a = p.C(3, 3)  p.B(4, 3) p.Test = \"hello\" return a end")
+		L.ExportGoFunction (new (PrintFunc))
+		L.ExportGoModule (new (MyModule))
+		err = L.LoadCodeString ("function test(p) myPrint(\"begin\") a = myModule.myAdd(3, 3)  p.B(4, 3) p.Test = \"hello\" return a end")
 		L.SetTop(0)
 		if (err == nil) {
 			L.GetGlobal ("test")
@@ -39,10 +86,12 @@ func main() {
 			err = L.PCall (1, 1)
 			
 			if err != nil {
+				print ("hello e")
 				print (err.Error())
 			}else {
-				a := L.ToString(-1)
-				fmt.Printf("%s : %s : %s", a, t.Test, t.Gihan)	
+				a := L.ToInteger(-1)
+				print ("hello")
+				fmt.Printf("%d : %s : %s", a, t.Test, t.Gihan)	
 			}
 			defer L.Close()
 		}else {

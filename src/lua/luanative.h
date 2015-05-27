@@ -30,7 +30,7 @@ const char *toString (lua_State *L , int idx);
 
 int loadCodeSegment(lua_State *L, const char *code);
 
-void pushObject(lua_State *L, void *obj) ;
+void pushObject(lua_State *L, void *obj, int add_meta_table) ;
 
 void pushFunction(lua_State *L, void *obj) ;
 
@@ -39,5 +39,7 @@ void initNewState(lua_State *L, void *go_stae) ;
 void deinitState (lua_State *L);
 
 void doLuaError (lua_State *L, const char * errorMsg);
+
+void addDefaultGC(lua_State *L);
 
 #endif

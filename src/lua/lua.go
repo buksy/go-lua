@@ -51,6 +51,18 @@ type GOLuaFunction interface {
 	Invoke(L *State) int
 }
 
+//Implement this interface on a struct to export a go written function
+type GoExportedFunction interface {
+	GOLuaFunction
+	Name() string
+}
+
+//Implement this interface on a struct to export a module witten in go on to lua
+type GoExportedModule interface {
+	ExportedFunctions() []GoExportedFunction
+	Name() string
+}
+
 type wrapper struct {
 	v          interface{}
 	obj_type   reflect.Kind
@@ -218,8 +230,32 @@ func (L *State) PushInterface(val interface{}) {
 	//	print ("---------------")
 	//	print (reflect.ValueOf(&w).Pointer())
 	//	C.pushObject(L.s, unsafe.Pointer(&w))
-	C.pushObject(L.s, unsafe.Pointer(reflect.ValueOf(&w).Pointer()))
+	C.pushObject(L.s, unsafe.Pointer(reflect.ValueOf(&w).Pointer()), 1)
 	//	print (w.pointer)
+}
+
+func (L *State) pushFunction(f GOLuaFunction) {
+	var w wrapper
+	w.v = f
+	w.isFunction = 1
+	w.pointer = 0
+	w.obj_type = reflect.Func
+	C.pushFunction(L.s, unsafe.Pointer(reflect.ValueOf(&w).Pointer()))
+}
+
+func (L *State) ExportGoFunction(namedFunc GoExportedFunction) {
+	L.pushFunction(namedFunc)
+	L.SetGlobal(namedFunc.Name())
+}
+
+func (L *State) ExportGoModule(namedMod GoExportedModule) {
+	var w wrapper
+	w.v = namedMod
+	w.isFunction = 1
+	w.pointer = 0
+	w.obj_type = reflect.Func
+	C.pushObject(L.s, unsafe.Pointer(reflect.ValueOf(&w).Pointer()), 1)
+	L.SetGlobal(namedMod.Name())
 }
 
 func (L *State) ToBoolean(index int) bool {
@@ -329,24 +365,26 @@ func (L *State) LoadCodeString(code string) error {
 
 func (L *State) PCall(nargs int, nresults int) (e error) {
 
-	//	defer func() {
-	//		if pa := recover(); pa != nil{
-	//			print ( pa.(error).Error())
-	//			e := new(luaError)
-	//			e.errStr = pa.(error).Error()
-	//		}
-	//	}()
+	defer func() {
+		if pa := recover(); pa != nil {
+			print(pa.(error).Error())
+			e := new(luaError)
+			e.errStr = pa.(error).Error()
+		}
+	}()
+
 	err := int(C.callCode(L.s, C.int(nargs), C.int(nresults)))
 	if err != 0 {
-		e := new(luaError)
-		e.errStr = L.ToString(-1)
+		er := new(luaError)
+		er.errStr = L.ToString(-1)
 		L.Pop(1) /* pop error message from the stack */
-
+		return er
 	}
 	return
 }
 
 func (L *State) Error(err string) {
+	print(err)
 	str := C.CString(err)
 	defer C.free(unsafe.Pointer(str))
 	C.doLuaError(L.s, str)
@@ -357,12 +395,12 @@ func go_callback_getter(obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
 	var ret int
 	//	print ((*wrapper)(obj).isFunction)
 	p := (*wrapper)(obj)
+	//To do any reflection we need to figure out the type
+	temState := (*State)(go_sate)
 	//	print (p)
 	if p.isFunction == 0 {
 		val := p.v
 		//		print (val)
-		//To do any reflection we need to figure out the type
-		temState := (*State)(go_sate)
 
 		var itype reflect.Value
 		if p.pointer == 1 {
@@ -419,6 +457,27 @@ func go_callback_getter(obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
 			// Need to find a way to sort this out luaL_error does a longjmp which GO does not like and
 			// Get a split stack panic
 			// Given that GO threads are not based on ptheads its bit dangarous as well for now I am going push nil here
+			temState.Error("No valid filed/method specified")
+		}
+	} else {
+		// This is module
+		if temState.IsString(2) {
+			fn := temState.ToString(2)
+			namedMod := p.v.(GoExportedModule)
+			fList := namedMod.ExportedFunctions()
+			var selectedF GoExportedFunction
+			selectedF = nil
+			for i := 0; i < len(fList); i++ {
+				f := fList[i]
+				if f.Name() == fn {
+					selectedF = f
+					break
+				}
+			}
+			if selectedF != nil {
+				temState.pushFunction(selectedF)
+				ret = 1
+			}
 		}
 	}
 	return C.int(ret)
