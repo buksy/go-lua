@@ -508,7 +508,7 @@ func go_callback_setter(obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
 				temState.PushNil()
 			} else {
 				ret = 0
-				set_filed_value(field, temState)
+				luaToGo(temState, field, 3)
 				temState.SetTop(0)
 			}
 		} else {
@@ -568,12 +568,6 @@ func goToLua(L *State, val reflect.Value, idx int) {
 		t = t.Elem()
 	}
 	kind := t.Kind()
-
-	//	// underlying type is 'primitive' ? wrap it as a proxy!
-	//	if isPrimitiveDerived(t, kind) != nil {
-	//		makeValueProxy(L, val, cINTERFACE_META)
-	//		return
-	//	}
 
 	switch kind {
 	case reflect.Float64, reflect.Float32:
@@ -644,3 +638,5 @@ func luaToGo(L *State, val reflect.Value, idx int) {
 		}
 	}
 }
+
+
