@@ -11,6 +11,7 @@ import (
 type TestStruct struct {
 	Gihan string
 	Test string
+	Map map[string]int
 }
 
 func (t *TestStruct) C(a int, b int) string{
@@ -24,6 +25,16 @@ func (t *TestStruct) B() string{
 	return "B"
 }
 
+func (t *TestStruct) D() *TestStruct{
+	s := new (TestStruct)
+	s.Gihan = "Me"
+	return s
+}
+
+func (t *TestStruct) E(a *TestStruct) {
+	print (a.Gihan)
+}
+
 // testing an exported function 
 type PrintFunc struct {
 	
@@ -34,7 +45,10 @@ func (f *PrintFunc) Name() string{
 }
 
 func (f *PrintFunc) Invoke(L * lua.State) int{
-	print ("print from go" +L.ToString(1) +" \n")
+//	print ("print from go " + strconv.Itoa(L.GetTop())+"  "+L.ToString(1))
+	v := L.ToInterface(1)
+	t := (v).(*TestStruct)
+	print (t.Gihan)
 	return 0
 }
 
@@ -75,23 +89,35 @@ func main() {
 //		err = L.LoadCodeString ("function test(n) return n*n*n end")
 		L.ExportGoFunction (new (PrintFunc))
 		L.ExportGoModule (new (MyModule))
-		err = L.LoadCodeString ("function test(p) myPrint(\"begin\") a = myModule.myAdd(3, 3)  p.B(4, 3) p.Test = \"hello\" return a end")
+		
+		// myPrint(p.E(p.D(),1))
+		err = L.LoadCodeString ("function test(p) a = myModule.myAdd(3, 3) p.B(4, 3) p.Map[\"test2\"] = 1 local x = p.D() print(p.E(x)) p.Test = \"hello\" return p.D() end")
 		L.SetTop(0)
+		
 		if (err == nil) {
 			L.GetGlobal ("test")
 			var t* TestStruct
 			t = new(TestStruct)
 			t.Gihan = "Hello"
+			
+			m := make (map[string]int)
+			m["test1"] = 1
+//			m["test2"] = 2
+//			m["test3"] = 4
+			t.Map = m
+			
 			L.PushInterface(t)
+			
+			print(L.ToInterface(-1).(*TestStruct).Gihan+"\n")
 			err = L.PCall (1, 1)
 			
 			if err != nil {
 				print ("hello e")
 				print (err.Error())
 			}else {
-				a := L.ToInteger(-1)
-				print ("hello")
-				fmt.Printf("%d : %s : %s", a, t.Test, t.Gihan)	
+				a := L.ToInterface(-1).(* TestStruct)
+				//print ("hello")
+				fmt.Printf("%s : %s : %s %d\n", a.Gihan , t.Test, t.Gihan, t.Map["test2"])	
 			}
 			defer L.Close()
 		}else {

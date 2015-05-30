@@ -42,4 +42,5 @@ void doLuaError (lua_State *L, const char * errorMsg);
 
 void addDefaultGC(lua_State *L);
 
+void * toUserData(lua_State *L, int idx) ;
 #endif

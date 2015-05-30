@@ -25,10 +25,16 @@ package lua
 import "C"
 
 import (
+	"fmt"
 	"reflect"
 	"unsafe"
 	//	"strconv"
 )
+
+func debug(str interface{}) {
+	//	print(str)
+	//	print ("\n")
+}
 
 type Lib int
 
@@ -75,29 +81,36 @@ type luaError struct {
 	errStr string
 }
 
+type luaErrorI interface {
+	error
+}
+
 type methodInvoker struct {
-	method reflect.Value
+	method string
+	value  interface{}
 }
 
 func (m *methodInvoker) Invoke(L *State) int {
-	in := make([]reflect.Value, m.method.Type().NumIn())
+	method, _ := get_method(m.value, m.method)
+	in := make([]reflect.Value, method.Type().NumIn())
 	var ret int
 	if L.GetTop() >= len(in) {
-		funcT := m.method.Type()
+		funcT := method.Type()
 		for j := 0; j < len(in); j++ {
 			t := funcT.In(j)
 			d := reflect.New(t)
 			luaToGo(L, d.Elem(), (j + 1))
 			in[j] = d.Elem()
 		}
-		out := m.method.Call(in)
+		debug(method.String())
+		out := method.Call(in)
 		ret = len(out)
 		L.SetTop(0)
 		for i := 0; i < ret; i++ {
-			goToLua(L, out[i], (i + 1))
+			goToLua(L, out[i])
 		}
 	} else {
-		print("method Invoked Failed not enough params")
+		debug("method Invoked Failed not enough params")
 		return 0
 	}
 
@@ -112,7 +125,7 @@ func NewState(loadDefaultLibs bool) (*State, error) {
 	L := new(State)
 	L.s = C.luaL_newstate()
 	if L.s != nil {
-		C.initNewState(L.s, unsafe.Pointer(L))
+		C.initNewState(L.s, unsafe.Pointer(reflect.ValueOf(L).Pointer()))
 		if loadDefaultLibs {
 			L.OpenLib(BASE)
 			L.OpenLib(OS)
@@ -212,26 +225,27 @@ func (L *State) PushInterface(val interface{}) {
 	if reflect.ValueOf(val).Kind() == reflect.Ptr {
 		w.pointer = 1
 	}
-	//	print (val)
+	//	debug (val)
 	//	w.name = "Test"
 	w.isFunction = 0
 	var k reflect.Kind
 	if w.pointer == 1 {
-		//		print ("Pointer ....")
+		//		debug ("Pointer ....")
 		k = reflect.ValueOf(val).Elem().Kind()
 	} else {
-		//		print ("Not Pointer")
+		//		debug ("Not Pointer")
 		k = reflect.ValueOf(val).Kind()
 	}
 	w.obj_type = k
+	debug(" Kind is " + k.String())
 	if (k != reflect.Slice) && (k != reflect.Struct) && (k != reflect.Map) {
 		panic("The pushed interface can only be a Slice, Map or Struct")
 	}
-	//	print ("---------------")
-	//	print (reflect.ValueOf(&w).Pointer())
+	//	debug ("---------------")
+	//	debug (reflect.ValueOf(&w).Pointer())
 	//	C.pushObject(L.s, unsafe.Pointer(&w))
 	C.pushObject(L.s, unsafe.Pointer(reflect.ValueOf(&w).Pointer()), 1)
-	//	print (w.pointer)
+	//	debug (w.pointer)
 }
 
 func (L *State) pushFunction(f GOLuaFunction) {
@@ -274,6 +288,16 @@ func (L *State) ToInteger(index int) int {
 func (L *State) ToNumber(index int) float64 {
 	var i C.int
 	return float64(C.lua_tonumberx(L.s, C.int(index), &i))
+}
+
+func (L *State) ToInterface(index int) interface{} {
+	debug("Calling to Interface\n")
+	po := C.toUserData(L.s, C.int(index))
+	if po != nil {
+		w := (*wrapper)(po)
+		return w.v
+	}
+	return nil
 }
 
 func (L *State) Type(index int) int {
@@ -347,7 +371,6 @@ func (L *State) GetTop() int {
 }
 
 // Loading the chunk
-
 func (L *State) LoadCodeString(code string) error {
 	cstr := C.CString(code)
 	defer C.free(unsafe.Pointer(cstr))
@@ -363,101 +386,125 @@ func (L *State) LoadCodeString(code string) error {
 	return nil
 }
 
-func (L *State) PCall(nargs int, nresults int) (e error) {
+func (L *State) PCall(nargs int, nresults int) (err error) {
+	//	defer func() {
+	//		if r := recover(); r != nil {
+	//            var ok bool
+	//            err, ok = r.(error)
+	//            if !ok {
+	//          	   err = fmt.Errorf("Error on lua script %v", r)
+	//            }
+	//         }
+	//	}()
 
-	defer func() {
-		if pa := recover(); pa != nil {
-			print(pa.(error).Error())
-			e := new(luaError)
-			e.errStr = pa.(error).Error()
-		}
-	}()
-
-	err := int(C.callCode(L.s, C.int(nargs), C.int(nresults)))
-	if err != 0 {
-		er := new(luaError)
-		er.errStr = L.ToString(-1)
+	errval := int(C.callCode(L.s, C.int(nargs), C.int(nresults)))
+	if errval != 0 {
+		errStr := L.ToString(-1)
+		err = fmt.Errorf("Error on lua script --> ", errStr)
 		L.Pop(1) /* pop error message from the stack */
-		return er
 	}
+
 	return
 }
 
 func (L *State) Error(err string) {
-	print(err)
-	str := C.CString(err)
-	defer C.free(unsafe.Pointer(str))
-	C.doLuaError(L.s, str)
+	debug(err)
+	C.luaL_where(L.s, 1)
+	pos := L.ToString(-1)
+	L.Pop(1)
+	panic(pos + " " + err)
 }
 
 //export go_callback_getter
 func go_callback_getter(obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
 	var ret int
-	//	print ((*wrapper)(obj).isFunction)
+	//	debug ((*wrapper)(obj).isFunction)
 	p := (*wrapper)(obj)
 	//To do any reflection we need to figure out the type
 	temState := (*State)(go_sate)
-	//	print (p)
+	//	debug (p)
 	if p.isFunction == 0 {
 		val := p.v
-		//		print (val)
 
 		var itype reflect.Value
 		if p.pointer == 1 {
-			//			print ("Is pointer")
 			itype = reflect.ValueOf(val).Elem()
 		} else {
-			//			print ("not pointer")
 			itype = reflect.ValueOf(val)
-
 		}
 
-		if temState.IsString(2) {
-			lookFor := temState.ToString(2)
-			//			print("Looking for 1 " + lookFor)
-			field := itype.FieldByName(lookFor)
-			//		print ("Looking for 2"+lookFor)
-			if !field.IsValid() {
-				//			print ("Looking for 3"+lookFor)
-				var ptr reflect.Value
-				var value reflect.Value
-				var method reflect.Value
-
-				if p.pointer == 1 {
-					ptr = reflect.ValueOf(val)
-					value = ptr.Elem()
-				} else {
-					ptr = reflect.New(reflect.TypeOf(val))
-					temp := ptr.Elem()
-					value = reflect.ValueOf(val)
-					temp.Set(value)
-				}
-
-				//Check the method on the pointer
-				method = ptr.MethodByName(lookFor)
-				if method.IsValid() {
-					return C.int(handle_method(method, temState))
-				} else {
-					method = value.MethodByName(lookFor)
-					if method.IsValid() {
-						return C.int(handle_method(method, temState))
+		switch p.obj_type {
+		case reflect.Struct:
+			{
+				if temState.IsString(2) {
+					lookFor := temState.ToString(2)
+					debug("Looking for 1 " + lookFor)
+					field := itype.FieldByName(lookFor)
+					//		debug ("Looking for 2"+lookFor)
+					if !field.IsValid() {
+						_, ok := get_method(val, lookFor)
+						temState.SetTop(0)
+						if ok {
+							ic := new(methodInvoker)
+							ic.method = lookFor
+							ic.value = val
+							var w wrapper
+							w.v = ic
+							w.isFunction = 1
+							w.pointer = 0
+							w.obj_type = reflect.Func
+							temState.SetTop(0)
+							C.pushFunction(temState.s, unsafe.Pointer(reflect.ValueOf(&w).Pointer()))
+							ret = 1
+						} else {
+							temState.Error("No method found \"" + lookFor + "\"")
+						}
 					} else {
-						// Need to find a way to sort this out luaL_error does a longjmp which GO does not like and
-						// Get a split stack panic
-						// Given that GO threads are not based on ptheads its bit dangarous as well for now I am going push nil here
-						temState.Error("No method found")
+						temState.SetTop(0)
+						ret = 1
+						goToLua(temState, field)
 					}
+				} else {
+					// Need to find a way to sort this out luaL_error does a longjmp which GO does not like and
+					// Get a split stack panic
+					// Given that GO threads are not based on ptheads its bit dangarous as well for now I am going push nil here
+					temState.Error("No valid filed/method specified")
 				}
-			} else {
+			}
+		case reflect.Slice:
+			{
+				// If this is a slice second argument should be a int
+				if temState.IsNumber(2) {
+					idx := (temState.ToInteger(2) - 1)
+					if idx >= 0 && idx < itype.Len() {
+						retVal := itype.Index(idx)
+						temState.SetTop(0)
+						ret = 1
+						goToLua(temState, retVal)
+					} else {
+						temState.SetTop(0)
+						ret = 1
+						temState.PushNil()
+					}
+				} else {
+					temState.SetTop(0)
+					ret = 1
+					temState.PushNil()
+				}
+			}
+		case reflect.Map:
+			{
+				debug("In maps")
+				m := itype.Type()
+				kt := m.Key()
+				keyV := reflect.New(kt)
+				luaToGo(temState, keyV.Elem(), 2)
 				temState.SetTop(0)
 				ret = 1
-				goToLua(temState, field, 1)
+				retVal := itype.MapIndex(keyV.Elem())
+				debug("Key is " + keyV.String())
+				goToLua(temState, retVal)
 			}
-		} else {
-			// Need to find a way to sort this out luaL_error does a longjmp which GO does not like and
-			// Get a split stack panic
-			// Given that GO threads are not based on ptheads its bit dangarous as well for now I am going push nil here
-			temState.Error("No valid filed/method specified")
 		}
 	} else {
 		// This is module
@@ -492,7 +539,6 @@ func go_callback_setter(obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
 
 		//To do any reflection we need to figure out the type
 		temState := (*State)(go_sate)
-
 		var itype reflect.Value
 		if p.pointer == 1 {
 			itype = reflect.ValueOf(val).Elem()
@@ -500,19 +546,44 @@ func go_callback_setter(obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
 			itype = reflect.ValueOf(val)
 		}
 
-		if temState.IsString(2) {
-			lookFor := temState.ToString(2)
-			field := itype.FieldByName(lookFor)
-			if !field.IsValid() || !field.CanSet() {
-				//			temState.Error("No Filed named \"" + lookFor + "\" found")
-				temState.PushNil()
-			} else {
-				ret = 0
-				luaToGo(temState, field, 3)
-				temState.SetTop(0)
+		switch p.obj_type {
+		case reflect.Struct:
+			{
+				if temState.IsString(2) {
+					lookFor := temState.ToString(2)
+					field := itype.FieldByName(lookFor)
+					if !field.IsValid() || !field.CanSet() {
+						//			temState.Error("No Filed named \"" + lookFor + "\" found")
+						temState.PushNil()
+					} else {
+						ret = 0
+						luaToGo(temState, field, 3)
+						temState.SetTop(0)
+					}
+				} else {
+					temState.Error("No valid filed/method specified")
+				}
 			}
-		} else {
-			temState.Error("No valid filed/method specified")
+		case reflect.Slice:
+			{
+				idx := temState.ToInteger(2) - 1
+				newVal := reflect.New(itype.Type().Elem())
+				luaToGo(temState, newVal.Elem(), 3)
+				if idx < 0 || idx > itype.Len() {
+					itype.Index(idx).Set(newVal)
+				}
+			}
+		case reflect.Map:
+			{
+				m := itype.Type()
+				kt := m.Key()
+				keyV := reflect.New(kt)
+				vt := m.Elem()
+				vV := reflect.New(vt)
+				luaToGo(temState, keyV.Elem(), 2)
+				luaToGo(temState, vV.Elem(), 3)
+				itype.SetMapIndex(keyV.Elem(), vV.Elem())
+			}
 		}
 	}
 	return C.int(ret)
@@ -536,25 +607,45 @@ func go_callback_method(obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
 	p := (*wrapper)(obj)
 	if p.isFunction == 1 {
 		f := p.v.(GOLuaFunction)
+		debug("f : ")
+		debug(f)
+		debug("\n")
 		ret = f.Invoke(temState)
 	}
 	return C.int(ret)
 }
 
-func handle_method(method reflect.Value, L *State) int {
-	ic := new(methodInvoker)
-	ic.method = method
-	var w wrapper
-	w.v = ic
-	w.isFunction = 1
-	w.pointer = 0
-	w.obj_type = reflect.Func
-	L.SetTop(0)
-	C.pushFunction(L.s, unsafe.Pointer(reflect.ValueOf(&w).Pointer()))
-	return 1
+func get_method(val interface{}, lookFor string) (reflect.Value, bool) {
+	//			debug ("Looking for 3"+lookFor)
+	var ptr reflect.Value
+	var value reflect.Value
+	var method reflect.Value
+
+	if reflect.ValueOf(val).Kind() == reflect.Ptr {
+		ptr = reflect.ValueOf(val)
+		value = ptr.Elem()
+	} else {
+		ptr = reflect.New(reflect.TypeOf(val))
+		temp := ptr.Elem()
+		value = reflect.ValueOf(val)
+		temp.Set(value)
+	}
+
+	//Check the method on the pointer
+	method = ptr.MethodByName(lookFor)
+	if method.IsValid() {
+		return method, true
+	} else {
+		method = value.MethodByName(lookFor)
+		if method.IsValid() {
+			return method, true
+		} else {
+			return method, false
+		}
+	}
 }
 
-func goToLua(L *State, val reflect.Value, idx int) {
+func goToLua(L *State, val reflect.Value) {
 	if !val.IsValid() {
 		L.PushNil()
 		return
@@ -592,7 +683,8 @@ func goToLua(L *State, val reflect.Value, idx int) {
 		}
 	case reflect.Slice, reflect.Map, reflect.Struct:
 		{
-			L.PushInterface(val)
+			debug(" Pushing " + kind.String())
+			L.PushInterface(val.Interface())
 		}
 
 	default:
@@ -608,9 +700,7 @@ func goToLua(L *State, val reflect.Value, idx int) {
 
 func luaToGo(L *State, val reflect.Value, idx int) {
 	kind := val.Kind()
-	//	print (L.Typename(idx))
-	//	print("\n")
-	//	print (L.GetTop())
+
 	switch kind {
 	case reflect.String:
 		{
@@ -628,15 +718,14 @@ func luaToGo(L *State, val reflect.Value, idx int) {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		{
 			val.SetInt(int64(L.ToNumber(idx)))
-			//				print(idx)
-			//				print("-----------")
-			//				print(val.Int())
 		}
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		{
 			val.SetUint(uint64(L.ToNumber(idx)))
 		}
+	case reflect.Struct, reflect.Interface, reflect.Ptr:
+		{
+			val.Set(reflect.ValueOf(L.ToInterface(idx)))
+		}
 	}
 }
-
-
