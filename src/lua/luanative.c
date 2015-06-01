@@ -121,7 +121,7 @@ static int func_invoker(lua_State *L) {
 //	fprintf(stderr, "my_call -->1 %d\n %p\n",lua_gettop(L), lua_touserdata(L, 1));
 	GoObject *obj = lua_touserdata(L, lua_upvalueindex(1));
 	GoObject *go_sate = get_go_state(L);
-//	fprintf(stderr, "my_call -->2 %d\n %p : %p\1",lua_gettop(L), obj, lua_touserdata(L, 1));
+//	fprintf(stderr, "my_call -->2 %d\n %p : %p\1 \n",lua_gettop(L), obj, lua_touserdata(L, 1));
 	int ret = go_callback_method(obj->go, go_sate->go);
 	return ret;
 }
@@ -164,11 +164,44 @@ static int go_new_index (lua_State * L) {
 
 	GoObject *go_sate = get_go_state(L);
 	GoObject *obj = (GoObject *) luaL_checkudata (L, 1, GO_LUA_OBJECT);
-//	fprintf(stderr, "push new index called \n");
+//	fprintf(stderr, "new index called \n");
 	int ret = 0;
 	if (obj) {
 //		fprintf(stderr, " go_new_index Looking for %s\n",toString(L, 2));
 		ret = go_callback_setter(obj->go, go_sate->go);
+	}
+	return ret;
+}
+
+static int go_len (lua_State * L) {
+	int ret = 0;
+	GoObject *go_sate = get_go_state(L);
+	GoObject *obj = (GoObject *) luaL_checkudata (L, 1, GO_LUA_OBJECT);
+	//	fprintf(stderr, "len called \n");
+		if (obj) {
+			ret = go_callback_len(obj->go, go_sate->go);
+		}
+	return ret;
+}
+
+static int go_pairs (lua_State * L) {
+	int ret = 0;
+	GoObject *go_sate = get_go_state(L);
+	GoObject *obj = (GoObject *) luaL_checkudata (L, 1, GO_LUA_OBJECT);
+//		fprintf(stderr, "pairs called \n");
+	if (obj) {
+		ret = go_callback_pairs(obj->go, go_sate->go);
+	}
+	return ret;
+}
+
+static int go_ipairs (lua_State * L) {
+	int ret = 0;
+	GoObject *go_sate = get_go_state(L);
+	GoObject *obj = (GoObject *) luaL_checkudata (L, 1, GO_LUA_OBJECT);
+//		fprintf(stderr, "ipairs called \n");
+	if (obj) {
+		ret = go_callback_ipairs(obj->go, go_sate->go);
 	}
 	return ret;
 }
@@ -219,6 +252,18 @@ void initNewState(lua_State *L, void *go_stae) {
 
 	lua_pushcfunction(L, go_index);
 	lua_setfield(L, -2, "__index");
+
+	lua_pushcfunction(L, go_new_index);
+	lua_setfield(L, -2, "__newindex");
+
+	lua_pushcfunction(L, go_len);
+	lua_setfield(L, -2, "__len");
+
+	lua_pushcfunction(L, go_pairs);
+	lua_setfield(L, -2, "__pairs");
+
+	lua_pushcfunction(L, go_ipairs);
+	lua_setfield(L, -2, "__ipairs");
 
 	lua_pushcfunction(L, go_new_index);
 	lua_setfield(L, -2, "__newindex");

@@ -60,6 +60,7 @@ func (f *AddFnc) Name() string{
 	return "myAdd"
 }
 
+
 func (f *AddFnc) Invoke(L * lua.State) int{
 	a := L.ToInteger(1) + L.ToInteger(2)
 	L.PushInteger(a)
@@ -82,7 +83,25 @@ func (f *MyModule) ExportedFunctions() []lua.GoExportedFunction{
 	return v
 }
 
+
+
 func main() {
+	code := `
+	json = require("json")
+	function test(p)
+a = myModule.myAdd(3, 3) 
+p.B(4, 3) 
+p.Map["test2"] = 2 
+print((#p.Map)) 
+for i, v in pairs(p) do
+      print(i, v)
+end
+local x = p.D() 
+print(p.E(x)) 
+p.Test = "hello" 
+return p.D() 
+end`
+	
 	L, err := lua.NewState (true)
 	if (err == nil) {
 //		err = L.LoadCodeString ("local a = 10; return a + 20")
@@ -91,7 +110,10 @@ func main() {
 		L.ExportGoModule (new (MyModule))
 		
 		// myPrint(p.E(p.D(),1))
-		err = L.LoadCodeString ("function test(p) a = myModule.myAdd(3, 3) p.B(4, 3) p.Map[\"test2\"] = 1 local x = p.D() print(p.E(x)) p.Test = \"hello\" return p.D() end")
+		
+		// print((#p.Map))
+		// print(p.E(x)) p.Test = \"hello\" return p.D()
+		err = L.LoadCodeString (code)
 		L.SetTop(0)
 		
 		if (err == nil) {
@@ -112,7 +134,6 @@ func main() {
 			err = L.PCall (1, 1)
 			
 			if err != nil {
-				print ("hello e")
 				print (err.Error())
 			}else {
 				a := L.ToInterface(-1).(* TestStruct)
