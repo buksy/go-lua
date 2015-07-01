@@ -28,6 +28,8 @@ import (
 	"fmt"
 	"reflect"
 	"unsafe"
+	"unicode"
+	"strings"
 	//	"strconv"
 )
 
@@ -35,6 +37,9 @@ func debug(str interface{}) {
 //		print(str)
 //		print ("\n")
 }
+
+var global_field_map = make(map[string]map[string]string)
+var global_method_map = make (map[string]map[string]string)
 
 type Lib int
 
@@ -48,6 +53,106 @@ const (
 	DEBUG   Lib = 9
 	BASE    Lib = 0
 )
+
+type LuaTableReader interface {
+	FromLUATable ( *State) error
+}
+
+type LuaTableWriter interface {
+	ToLUATable ( *State) error
+}
+
+func is_valid_name(name string) bool {
+	r := rune(name[0])
+	return !unicode.IsLower(r)
+}
+
+func build_struct_map(t reflect.Type) {
+//	debug ("Building struct map for "+t.Name())
+	m := global_field_map[t.Name()]
+	if m == nil {
+		m := make(map[string]string)
+		build_map_recursive(t, m)
+		global_field_map[t.Name()] = m
+//		fmt.Println(global_field_map)
+	}
+	method_map := global_method_map[t.Name()]
+	if (method_map == nil) {
+		method_map := make (map[string]string)
+		for i := 0; i < t.NumMethod() ; i++ {
+			method := t.Method(i)
+			m_name := method.Name
+			if (is_valid_name(m_name)) {
+				method_map[strings.ToUpper(m_name)] = m_name
+			}
+			
+		}
+		global_method_map[t.Name()] = method_map
+	}
+}
+
+
+func get_field_name(type_name string, fname string) string {
+	var ret string
+	ret = ""
+//	fmt.Println ("Looking for "+type_name)
+	fmt.Println(global_field_map)
+	m := global_field_map[type_name]
+	if (m != nil) {
+		ret = m[fname]
+//		fmt.Println ("Looking for Field"+fname)
+		if 	ret == "" {
+			ret = m[strings.ToUpper(fname)]
+//			fmt.Println ("Value for Field is "+ret)
+		}
+	}
+	
+	return ret
+}
+
+func get_method_name(type_name string, mname string) string {
+	if !is_valid_name(mname) {
+		tem := mname[1:len(mname)]
+		c  := strings.ToUpper(string(mname[0]))
+		return c+tem
+	}
+	return mname
+//	m := global_method_map[type_name]
+//	if (m != nil) {
+//		return m[strings.ToUpper(mname)]	
+//	}
+//	return ""
+}
+
+
+
+func build_map_recursive(t reflect.Type, field_map map[string]string ) {
+	for i := 0; i < t.NumField() ; i++ {
+		field := t.Field(i)
+		field_name := field.Name
+//		debug("Filed is "+field_name+"\n")
+		if (is_valid_name(field_name)) {
+			kind := field.Type.Kind()
+			if(kind == reflect.Struct && field.Type.Name() == field_name){
+				build_map_recursive (field.Type, field_map)
+			}else {
+				// add the value in
+//				debug("Filed added "+field_name+"\n")
+				field_map[strings.ToUpper(field_name)] = field_name
+				
+				// Now support the JOSN tag format
+				jsonTag := field.Tag.Get("json")
+				if jsonTag != "" {			
+					jsonName := strings.Split(jsonTag,",")[0]
+					if jsonName != "" {
+						field_map[jsonName] = field_name
+					}
+				}
+			}
+		}
+	}
+	
+}
 
 type State struct {
 	s *C.lua_State
@@ -103,6 +208,8 @@ func (m *methodInvoker) Invoke(L *State) int {
 	method, _ := get_method(m.value, m.method)
 	in := make([]reflect.Value, method.Type().NumIn())
 	var ret int
+	fmt.Println("Top is")
+	fmt.Println (L.GetTop())
 	if L.GetTop() >= len(in) {
 		funcT := method.Type()
 		for j := 0; j < len(in); j++ {
@@ -240,12 +347,16 @@ func (L *State) PushInterface(val interface{}) {
 	//	w.name = "Test"
 	w.isFunction = 0
 	var k reflect.Kind
+	var sType reflect.Type
+	
 	if w.pointer == 1 {
 		//		debug ("Pointer ....")
 		k = reflect.ValueOf(val).Elem().Kind()
+		sType = reflect.ValueOf(val).Elem().Type()
 	} else {
 		//		debug ("Not Pointer")
 		k = reflect.ValueOf(val).Kind()
+		sType = reflect.ValueOf(val).Type()
 	}
 	w.obj_type = k
 	debug(" Kind is " + k.String())
@@ -255,6 +366,10 @@ func (L *State) PushInterface(val interface{}) {
 	//	debug ("---------------")
 	//	debug (reflect.ValueOf(&w).Pointer())
 	//	C.pushObject(L.s, unsafe.Pointer(&w))
+	if (k == reflect.Struct ) {
+		w.name = sType.Name()
+		build_struct_map (sType)
+	}
 	L.obj_table = append(L.obj_table, val)
 	C.pushObject(L.s, unsafe.Pointer(reflect.ValueOf(w).Pointer()), 1)
 	//	debug (w.pointer)
@@ -383,6 +498,16 @@ func (L *State) GetTop() int {
 	return int(C.lua_gettop(L.s))
 }
 
+func (L *State ) ReadFormTable( reader LuaTableReader, idx int) error {
+	if (L.IsTable(idx)) {
+		return reader.FromLUATable(L)
+	}else {
+		err := new(luaError)
+		err.errStr = "Given index is not a LuaTable"
+		return err
+	}
+} 
+
 // Loading the chunk
 func (L *State) LoadCodeString(code string) error {
 	cstr := C.CString(code)
@@ -413,7 +538,7 @@ func (L *State) PCall(nargs int, nresults int) (err error) {
 	errval := int(C.callCode(L.s, C.int(nargs), C.int(nresults)))
 	if errval != 0 {
 		errStr := L.ToString(-1)
-		err = fmt.Errorf("Error on lua script --> ", errStr)
+		err = fmt.Errorf("Error on lua script --> %s", errStr)
 		L.Pop(1) /* pop error message from the stack */
 	}
 
@@ -570,15 +695,20 @@ func go_callback_getter(obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
 			{
 				if temState.IsString(2) {
 					lookFor := temState.ToString(2)
-					debug("Looking for 1 " + lookFor)
-					field := itype.FieldByName(lookFor)
+//					debug("Looking for 1 " + lookFor)
+					
+					fname := get_field_name(p.name, lookFor)
+//					fmt.Println("Field is"+fname)
+					field := itype.FieldByName(fname)
+					
 					//		debug ("Looking for 2"+lookFor)
 					if !field.IsValid() {
-						_, ok := get_method(val, lookFor)
+						method_name := get_method_name(p.name,lookFor)
+						_, ok := get_method(val, method_name)
 						temState.SetTop(0)
 						if ok {
 							ic := new(methodInvoker)
-							ic.method = lookFor
+							ic.method = method_name
 							ic.value = val
 							w := temState.newWrapper()
 							w.v = ic
@@ -683,7 +813,8 @@ func go_callback_setter(obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
 			{
 				if temState.IsString(2) {
 					lookFor := temState.ToString(2)
-					field := itype.FieldByName(lookFor)
+					fname := get_field_name(p.name, lookFor)
+					field := itype.FieldByName(fname)
 					if !field.IsValid() || !field.CanSet() {
 						//			temState.Error("No Filed named \"" + lookFor + "\" found")
 						temState.PushNil()
@@ -896,5 +1027,3 @@ func go_callback_ipairs (obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
 	}
 	return C.int(ret)
 }
-
-
