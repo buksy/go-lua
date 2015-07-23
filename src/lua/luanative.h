@@ -26,13 +26,13 @@ void openDefaultLib (lua_State *L,  int openlib);
 
 int callCode (lua_State *L , int nargs, int retargs);
 
-const char *toString (lua_State *L , int idx);
+char *toString (lua_State *L , int idx);
 
 int loadCodeSegment(lua_State *L, const char *code);
 
-void pushObject(lua_State *L, void *obj, int add_meta_table) ;
+void pushObject(lua_State *L, long long obj, int add_meta_table) ;
 
-void pushFunction(lua_State *L, void *obj) ;
+void pushFunction(lua_State *L, long long obj) ;
 
 void initNewState(lua_State *L, void *go_stae) ;
 
@@ -42,5 +42,5 @@ void doLuaError (lua_State *L, const char * errorMsg);
 
 void addDefaultGC(lua_State *L);
 
-void * toUserData(lua_State *L, int idx) ;
+long long toUserData(lua_State *L, int idx) ;
 #endif

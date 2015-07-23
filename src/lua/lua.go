@@ -24,12 +24,14 @@ package lua
 */
 import "C"
 
+
 import (
 	"fmt"
 	"reflect"
 	"unsafe"
 	"unicode"
 	"strings"
+	"sync"
 	//	"strconv"
 )
 
@@ -96,7 +98,7 @@ func get_field_name(type_name string, fname string) string {
 	var ret string
 	ret = ""
 //	fmt.Println ("Looking for "+type_name)
-	fmt.Println(global_field_map)
+//	fmt.Println(global_field_map)
 	m := global_field_map[type_name]
 	if (m != nil) {
 		ret = m[fname]
@@ -158,7 +160,9 @@ type State struct {
 	s *C.lua_State
 	// Any object are kept here till teh lua script is finished otherwise go will be garbadge collecting.
 	// Go can not see what is coging on in the C side so Go will happly grabadge collect if the values is not refered
-	obj_table []interface{}
+	obj_table map[int64]*wrapper
+	curr_id int64
+	lock *sync.Mutex
 }
 
 type GOLuaFunction interface {
@@ -183,11 +187,17 @@ type wrapper struct {
 	pointer    int
 	isFunction int
 	name       string
+	id 		   int64
 }
 
 func (L *State) newWrapper() *wrapper{
 	w := new(wrapper)
-	L.obj_table = append(L.obj_table, w)
+	L.lock.Lock()
+	w.id = L.curr_id
+	L.curr_id ++
+	L.lock.Unlock()
+	L.obj_table[w.id] = w
+	//L.obj_table = append(L.obj_table, w)
 	return w
 }
 
@@ -208,8 +218,7 @@ func (m *methodInvoker) Invoke(L *State) int {
 	method, _ := get_method(m.value, m.method)
 	in := make([]reflect.Value, method.Type().NumIn())
 	var ret int
-	fmt.Println("Top is")
-	fmt.Println (L.GetTop())
+	//fmt.Printf("Get Top %s %d len %d\n",m.method , L.GetTop(), len(in))
 	if L.GetTop() >= len(in) {
 		funcT := method.Type()
 		for j := 0; j < len(in); j++ {
@@ -226,7 +235,9 @@ func (m *methodInvoker) Invoke(L *State) int {
 			goToLua(L, out[i])
 		}
 	} else {
-		debug("method Invoked Failed not enough params")
+		str := fmt.Sprintf("Not enough arguments for call %s, require %d parameters call only supplied %d ", m.method, len(in), L.GetTop())
+		L.Error(str)
+//		debug("method Invoked Failed not enough params")
 		return 0
 	}
 
@@ -239,6 +250,9 @@ func (err *luaError) Error() string {
 
 func NewState(loadDefaultLibs bool) (*State, error) {
 	L := new(State)
+	L.obj_table  = make(map[int64]*wrapper)
+	L.curr_id = 0
+	L.lock = new(sync.Mutex)
 	L.s = C.luaL_newstate()
 	if L.s != nil {
 		C.initNewState(L.s, unsafe.Pointer(reflect.ValueOf(L).Pointer()))
@@ -262,7 +276,7 @@ func NewState(loadDefaultLibs bool) (*State, error) {
 func (L *State) Close() {
 	C.deinitState(L.s)
 	C.lua_close(L.s)
-	L.obj_table = nil
+	L.obj_table = make(map[int64]*wrapper)
 }
 
 func (L *State) OpenLib(l Lib) {
@@ -370,8 +384,8 @@ func (L *State) PushInterface(val interface{}) {
 		w.name = sType.Name()
 		build_struct_map (sType)
 	}
-	L.obj_table = append(L.obj_table, val)
-	C.pushObject(L.s, unsafe.Pointer(reflect.ValueOf(w).Pointer()), 1)
+//	L.obj_table = append(L.obj_table, val)
+	C.pushObject(L.s,  C.longlong(w.id), 1)
 	//	debug (w.pointer)
 }
 
@@ -381,7 +395,7 @@ func (L *State) pushFunction(f GOLuaFunction) {
 	w.isFunction = 1
 	w.pointer = 0
 	w.obj_type = reflect.Func
-	C.pushFunction(L.s, unsafe.Pointer(reflect.ValueOf(w).Pointer()))
+	C.pushFunction(L.s, C.longlong(w.id))
 }
 
 func (L *State) ExportGoFunction(namedFunc GoExportedFunction) {
@@ -395,7 +409,7 @@ func (L *State) ExportGoModule(namedMod GoExportedModule) {
 	w.isFunction = 1
 	w.pointer = 0
 	w.obj_type = reflect.Func
-	C.pushObject(L.s, unsafe.Pointer(reflect.ValueOf(w).Pointer()), 1)
+	C.pushObject(L.s, C.longlong(w.id), 1)
 	L.SetGlobal(namedMod.Name())
 }
 
@@ -404,7 +418,9 @@ func (L *State) ToBoolean(index int) bool {
 }
 
 func (L *State) ToString(index int) string {
-	return C.GoString(C.toString(L.s, C.int(index)))
+	str := C.toString(L.s, C.int(index))
+//	defer C.free(unsafe.Pointer(str))
+	return C.GoString(str)
 }
 
 func (L *State) ToInteger(index int) int {
@@ -419,9 +435,9 @@ func (L *State) ToNumber(index int) float64 {
 
 func (L *State) ToInterface(index int) interface{} {
 	debug("Calling to Interface\n")
-	po := C.toUserData(L.s, C.int(index))
-	if po != nil {
-		w := (*wrapper)(po)
+	id := C.toUserData(L.s, C.int(index))
+	if id > -1 {
+		w := L.obj_table[int64(id)]
 		debug(w.v)
 		return w.v
 	}
@@ -550,7 +566,7 @@ func (L *State) Error(err string) {
 	C.luaL_where(L.s, 1)
 	pos := L.ToString(-1)
 	L.Pop(1)
-	panic(pos + " " + err)
+	panic("Error on line " +pos + err)
 }
 
 
@@ -673,12 +689,12 @@ func luaToGo(L *State, val reflect.Value, idx int) {
 /** Exported functions to C**/
 
 //export go_callback_getter
-func go_callback_getter(obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
+func go_callback_getter(id int64, go_sate unsafe.Pointer) C.int {
 	var ret int
 	//	debug ((*wrapper)(obj).isFunction)
-	p := (*wrapper)(obj)
 	//To do any reflection we need to figure out the type
 	temState := (*State)(go_sate)
+	p := temState.obj_table[id]
 	//	debug (p)
 	if p.isFunction == 0 {
 		val := p.v
@@ -716,7 +732,7 @@ func go_callback_getter(obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
 							w.pointer = 0
 							w.obj_type = reflect.Func
 							temState.SetTop(0)
-							C.pushFunction(temState.s, unsafe.Pointer(reflect.ValueOf(w).Pointer()))
+							C.pushFunction(temState.s, C.longlong(w.id))
 							ret = 1
 						} else {
 							temState.Error("No method found \"" + lookFor + "\"")
@@ -793,14 +809,14 @@ func go_callback_getter(obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
 }
 
 //export go_callback_setter
-func go_callback_setter(obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
+func go_callback_setter(id int64, go_sate unsafe.Pointer) C.int {
 	var ret int
-	p := (*wrapper)(obj)
+	temState := (*State)(go_sate)
+	p := temState.obj_table[id]
 	if p.isFunction != 1 {
 		val := p.v
 
 		//To do any reflection we need to figure out the type
-		temState := (*State)(go_sate)
 		var itype reflect.Value
 		if p.pointer == 1 {
 			itype = reflect.ValueOf(val).Elem()
@@ -864,27 +880,30 @@ func set_filed_value(v reflect.Value, L *State) {
 }
 
 //export go_callback_method
-func go_callback_method(obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
+func go_callback_method(id int64, go_sate unsafe.Pointer) C.int {
 	var ret int
 	temState := (*State)(go_sate)
-	p := (*wrapper)(obj)
+	p := temState.obj_table[id]
 	if p.isFunction == 1 {
 		f := p.v.(GOLuaFunction)
-		debug("f : ")
-		debug(f)
-		debug("\n")
+//		fmt.Printf("%d : %v ", p.id, )
 		ret = f.Invoke(temState)
+		a,ok := f.(*methodInvoker)
+		if ok {
+			fmt.Printf("%d : %v \n", p.id, a.method )
+			delete(temState.obj_table, p.id)
+		}
 	}
 	return C.int(ret)
 }
 
 //export go_callback_len
-func go_callback_len (obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
+func go_callback_len (id int64, go_sate unsafe.Pointer) C.int {
 	var ret int
 	ret = 1
 	temState := (*State)(go_sate)
 	temState.SetTop(0)
-	p := (*wrapper)(obj)
+	p := temState.obj_table[id]
 	if p.isFunction == 0 {
 		var val reflect.Value
 		if p.pointer == 1 {
@@ -984,13 +1003,22 @@ func (p *loopStruct) Invoke(L *State) int {
 	return ret
 }
 
+func clone_wrapper (L *State , ori *wrapper) *wrapper {
+	w := L.newWrapper()
+	w.isFunction = ori.isFunction
+	w.name = ori.name
+	w.obj_type = ori.obj_type
+	w.pointer = ori.pointer
+	return w
+}
+
 //export go_callback_pairs
-func go_callback_pairs (obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
+func go_callback_pairs (id int64, go_sate unsafe.Pointer) C.int {
 	var ret int
 	ret = 2
 	temState := (*State)(go_sate)
 	temState.SetTop(0)
-	p := (*wrapper)(obj)
+	p := temState.obj_table[id]
 	if p.isFunction == 0 {
 		loop := new (loopStruct)
 		loop.v = p.v
@@ -999,7 +1027,8 @@ func go_callback_pairs (obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
 		loop.obj_type = p.obj_type
 		temState.pushFunction(loop)
 		loop.ip_pairs = 0
-		C.pushObject(temState.s, unsafe.Pointer(reflect.ValueOf(p).Pointer()), 1)
+//		p = clone_wrapper(temState,p)
+		C.pushObject(temState.s, C.longlong(p.id), 1)
 		temState.PushNil()
 		ret = 3
 	}
@@ -1007,12 +1036,12 @@ func go_callback_pairs (obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
 }
 
 //export go_callback_ipairs
-func go_callback_ipairs (obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
+func go_callback_ipairs (id int64, go_sate unsafe.Pointer) C.int {
 	var ret int
 	ret = 1
 	temState := (*State)(go_sate)
 	temState.SetTop(0)
-	p := (*wrapper)(obj)
+	p := temState.obj_table[id]
 	if p.isFunction == 0 {
 		loop := new (loopStruct)
 		loop.v = p.v
@@ -1021,9 +1050,25 @@ func go_callback_ipairs (obj unsafe.Pointer, go_sate unsafe.Pointer) C.int {
 		loop.obj_type = p.obj_type
 		temState.pushFunction(loop)
 		loop.ip_pairs = 1
-		C.pushObject(temState.s, unsafe.Pointer(reflect.ValueOf(p).Pointer()), 1)
+//		p = clone_wrapper(temState,p)
+		C.pushObject(temState.s, C.longlong(p.id), 1)
 		temState.PushInteger(0)
 		ret = 3
 	}
 	return C.int(ret)
 }
+
+//export go_cleanup
+func go_cleanup (id int64, go_sate unsafe.Pointer) {
+	//fmt.Printf("Removing id %d \n",(id))
+	temState := (*State)(go_sate)
+	temState.SetTop(0)
+	p := temState.obj_table[id]
+	if p != nil {
+		
+		fmt.Printf("Removing 2 id  %d : %v \n",(id), p.v)
+		delete(temState.obj_table, id)
+		p.v = nil
+	}
+}
+

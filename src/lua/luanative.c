@@ -26,7 +26,8 @@
 #define GO_SATE 	  		"buksy.go.state"
 
 typedef struct GoObject {
-	void *go;
+	long long go;
+	void *state ;
 	char *name;
 }GoObject;
 
@@ -98,20 +99,21 @@ int callCode (lua_State *L , int nargs, int retargs) {
 	return ret;
 }
 
-const char *toString (lua_State *L , int idx) {
-	return lua_tostring(L, idx);
+char *toString (lua_State *L , int idx) {
+	return (char *)lua_tostring(L, idx);
 }
 
 int loadCodeSegment(lua_State *L, const char *code) {
 	return luaL_dostring (L, code);
 }
 
-void pushObject(lua_State *L, void *obj, int add_meta_table) {
+void pushObject(lua_State *L, long long obj, int add_meta_table) {
 	GoObject *o = lua_newuserdata (L, sizeof(GoObject));
 	o->go = obj;
 	o->name = "obj";
 //	fprintf(stderr, "push object called \n");
 	if(add_meta_table) {
+//		fprintf(stderr, "push object called \n");
 		luaL_getmetatable (L, GO_LUA_OBJECT);
 		lua_setmetatable (L, -2);
 	}
@@ -122,11 +124,11 @@ static int func_invoker(lua_State *L) {
 	GoObject *obj = lua_touserdata(L, lua_upvalueindex(1));
 	GoObject *go_sate = get_go_state(L);
 //	fprintf(stderr, "my_call -->2 %d\n %p : %p\1 \n",lua_gettop(L), obj, lua_touserdata(L, 1));
-	int ret = go_callback_method(obj->go, go_sate->go);
+	int ret = go_callback_method(obj->go, go_sate->state);
 	return ret;
 }
 
-void pushFunction(lua_State *L, void *obj) {
+void pushFunction(lua_State *L, long long obj) {
 	GoObject *o = lua_newuserdata (L, sizeof(GoObject));
 	o->go = obj;
 	o->name = "func";
@@ -139,10 +141,12 @@ void pushFunction(lua_State *L, void *obj) {
 }
 
 static int gc_goobj (lua_State * L) {
+	GoObject *go_sate = get_go_state(L);
 	GoObject *obj = (GoObject *) luaL_checkudata (L, 1, GO_LUA_OBJECT);
 //	fprintf(stderr, "gc called\n");
 	if (obj) {
-		obj->go = NULL;
+		go_cleanup (obj->go, go_sate->state);
+		obj->go = -1;
 	}
 	return 0;
 }
@@ -155,7 +159,7 @@ static int go_index (lua_State * L) {
 //	fprintf(stderr, "get index called \n");
 	if (obj) {
 //		fprintf(stderr, "go_index Looking for %s\n",toString(L, 2));
-		ret = go_callback_getter(obj->go, go_sate->go);
+		ret = go_callback_getter(obj->go, go_sate->state);
 	}
 	return ret;
 }
@@ -168,7 +172,7 @@ static int go_new_index (lua_State * L) {
 	int ret = 0;
 	if (obj) {
 //		fprintf(stderr, " go_new_index Looking for %s\n",toString(L, 2));
-		ret = go_callback_setter(obj->go, go_sate->go);
+		ret = go_callback_setter(obj->go, go_sate->state);
 	}
 	return ret;
 }
@@ -179,7 +183,7 @@ static int go_len (lua_State * L) {
 	GoObject *obj = (GoObject *) luaL_checkudata (L, 1, GO_LUA_OBJECT);
 	//	fprintf(stderr, "len called \n");
 		if (obj) {
-			ret = go_callback_len(obj->go, go_sate->go);
+			ret = go_callback_len(obj->go, go_sate->state);
 		}
 	return ret;
 }
@@ -190,7 +194,7 @@ static int go_pairs (lua_State * L) {
 	GoObject *obj = (GoObject *) luaL_checkudata (L, 1, GO_LUA_OBJECT);
 //		fprintf(stderr, "pairs called \n");
 	if (obj) {
-		ret = go_callback_pairs(obj->go, go_sate->go);
+		ret = go_callback_pairs(obj->go, go_sate->state);
 	}
 	return ret;
 }
@@ -201,7 +205,7 @@ static int go_ipairs (lua_State * L) {
 	GoObject *obj = (GoObject *) luaL_checkudata (L, 1, GO_LUA_OBJECT);
 //		fprintf(stderr, "ipairs called \n");
 	if (obj) {
-		ret = go_callback_ipairs(obj->go, go_sate->go);
+		ret = go_callback_ipairs(obj->go, go_sate->state);
 	}
 	return ret;
 }
@@ -216,7 +220,7 @@ static int go_call (lua_State * L) {
 //		fprintf(stderr, "go function called %s \n", obj->name);
 //		fprintf(stderr, " go_new_index Looking for %d\n",lua_gettop(L));
 		lua_remove(L,1);
-		ret = go_callback_method(obj->go, go_sate->go);
+		ret = go_callback_method(obj->go, go_sate->state);
 	}
 	return ret;
 }
@@ -235,7 +239,7 @@ void initNewState(lua_State *L, void *go_stae) {
 	//lua_atpanic(L, &go_lua_atpanic);
 	/* Set the go state state in the Lua state. */
 	GoObject *ref = lua_newuserdata(L, sizeof(GoObject));
-	ref->go = go_stae;
+	ref->state = go_stae;
 	lua_createtable(L, 0, 1);
 	lua_pushcfunction(L, gc_goobj);
 	lua_setfield(L, -2, "__gc");
@@ -282,8 +286,8 @@ void initNewState(lua_State *L, void *go_stae) {
 }
 
 void deinitState(lua_State *L ) {
-	lua_pushnil(L);
-	lua_setfield(L, LUA_REGISTRYINDEX, GO_SATE);
+//	lua_pushnil(L);
+//	lua_setfield(L, LUA_REGISTRYINDEX, GO_SATE);
 }
 
 void doLuaError (lua_State *L, const char * errorMsg){
@@ -293,12 +297,12 @@ void doLuaError (lua_State *L, const char * errorMsg){
 	luaL_error(L, errorMsg);
 }
 
-void * toUserData(lua_State *L, int idx) {
+long long toUserData(lua_State *L, int idx) {
 	GoObject *obj = (GoObject *) lua_touserdata (L, idx);
 //	fprintf(stderr, " user data %p %d %s\n", obj, lua_isuserdata(L, idx), lua_typename(L, idx));
 	if (obj) {
 //		fprintf(stderr, " user data %p\n", obj);
 		return obj->go;
 	}
-	return NULL;
+	return -1;
 }
