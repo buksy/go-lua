@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"time"
+//	"utils"
 )
 
 
@@ -28,13 +29,14 @@ func (t *TestStruct) b() string{
 	return "B"
 }
 
-func (t *TestStruct) D() *TestStruct{
+func (t *TestStruct) D(abc string ) *TestStruct{
 	s := new (TestStruct)
 	s.Gihan = "Me"
 	return s
 }
 
-func (t *TestStruct) E(a *TestStruct, b string) {
+func (t *TestStruct) E(b string, a *TestStruct) {
+	print("printing gihen")
 	print (a.Gihan)
 }
 
@@ -118,9 +120,10 @@ for i, v in pairs(p) do
 end
 print(p.Map.test1)
 p.A = "egf"
-local x = p.d() 
-print(p.TS.E(x,"hello")) 
-x = p.d() 
+local x = p:d("abc") 
+t = p.TS
+print(p.TS.E("hello",p:d("baba"))) 
+x = p.d("") 
 x = nil
 p.Test = "hello" 
 return {test="hello " .. p.Map.test1, yo="hi"} 
@@ -138,6 +141,14 @@ func main() {
 		time.Sleep(time.Second * 1)
 //	}(i)
 	}
+
+//	data := "POST&https%3A%2F%2Fapi.twitter.com%2Foauth%2Frequest_token&oauth_consumer_key%3DrXdpPMLnrcZMHLSfj1C83AvGE%26oauth_nonce%3D242541ca3b34f9a8d743be84827accc5%26oauth_signature_method%3DHMAC-SHA1%26oauth_timestamp%3D1438707944%26oauth_version%3D1.0"
+//	key := "gc4nsiiTpsKHHkXtQrsre3FXVsNoKB6IpILrly1orUprkhTYhw&"
+//	
+//	cr := new(utils.Crypto)
+//	str := cr.HmacSHA1Sum(key, data, "base64")
+//	print(cr.URLEncode(str))
+//	cr := 
 	
 	time.Sleep(time.Hour)
 }
@@ -158,7 +169,7 @@ func do_work(a int) {
 				
 				// print((#p.Map))
 				// print(p.E(x)) p.Test = \"hello\" return p.D()
-				err = L.LoadCodeString (code)
+				err = L.LoadCodeString (code, "mycode")
 				L.SetTop(0)
 				
 				if (err == nil) {

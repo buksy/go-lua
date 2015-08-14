@@ -95,16 +95,24 @@ void openDefaultLib (lua_State *L,  int openlib) {
 }
 
 int callCode (lua_State *L , int nargs, int retargs) {
-	int ret = lua_pcall(L, nargs, retargs, 0);
-	return ret;
+//	try {
+		int ret = lua_pcall(L, nargs, retargs, 0);
+		return ret;
+//	}catch(...) {
+//		return -1;
+//	}
 }
 
-char *toString (lua_State *L , int idx) {
-	return (char *)lua_tostring(L, idx);
+const char *toString (lua_State *L , int idx) {
+//	const char *ret = lua_tostring(L, idx);
+//	if (ret) {
+//		return strdup(ret);
+//	}
+	return lua_tostring(L, idx);;
 }
 
-int loadCodeSegment(lua_State *L, const char *code) {
-	return luaL_dostring (L, code);
+int loadCodeSegment(lua_State *L, const char *code, const char *name) {
+	return luaL_loadbuffer (L, code, strlen(code), name);
 }
 
 void pushObject(lua_State *L, long long obj, int add_meta_table) {

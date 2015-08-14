@@ -20,6 +20,7 @@ package lua
 /*
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "luanative.h"
 */
 import "C"
@@ -276,11 +277,18 @@ func NewState(loadDefaultLibs bool) (*State, error) {
 func (L *State) Close() {
 	C.deinitState(L.s)
 	C.lua_close(L.s)
-	L.obj_table = make(map[int64]*wrapper)
+//	L.s = nil
+	L.obj_table = nil
 }
 
 func (L *State) OpenLib(l Lib) {
 	C.openDefaultLib(L.s, C.int(int(l)))
+}
+
+func (L *State) LoadExternalModule(name string) error{
+	L.GetGlobal("require")
+	L.PushString(name)
+	return L.PCall(1,1)
 }
 
 // Check methods
@@ -329,8 +337,8 @@ func (L *State) PushBoolean(b bool) {
 
 func (L *State) PushString(str string) {
 	cstr := C.CString(str)
-	defer C.free(unsafe.Pointer(cstr))
 	C.lua_pushstring(L.s, cstr)
+	C.free(unsafe.Pointer(cstr))
 }
 
 func (L *State) PushInteger(n int) {
@@ -350,43 +358,55 @@ func (L *State) PushValue(index int) {
 }
 
 func (L *State) PushInterface(val interface{}) {
-	w := L.newWrapper()
-	w.v = val
-	w.pointer = 0
 	
-	if reflect.ValueOf(val).Kind() == reflect.Ptr {
-		w.pointer = 1
-	}
-	//	debug (val)
-	//	w.name = "Test"
-	w.isFunction = 0
-	var k reflect.Kind
-	var sType reflect.Type
-	
-	if w.pointer == 1 {
-		//		debug ("Pointer ....")
-		k = reflect.ValueOf(val).Elem().Kind()
-		sType = reflect.ValueOf(val).Elem().Type()
-	} else {
-		//		debug ("Not Pointer")
-		k = reflect.ValueOf(val).Kind()
-		sType = reflect.ValueOf(val).Type()
-	}
-	w.obj_type = k
-	debug(" Kind is " + k.String())
-	if (k != reflect.Slice) && (k != reflect.Struct) && (k != reflect.Map) {
-		panic("The pushed interface can only be a Slice, Map or Struct")
-	}
-	//	debug ("---------------")
-	//	debug (reflect.ValueOf(&w).Pointer())
-	//	C.pushObject(L.s, unsafe.Pointer(&w))
-	if (k == reflect.Struct ) {
-		w.name = sType.Name()
-		build_struct_map (sType)
-	}
-//	L.obj_table = append(L.obj_table, val)
-	C.pushObject(L.s,  C.longlong(w.id), 1)
+	str, str_ok := val.(string)
+	in, int_ok := val.(int64)
+	fl, float_ok := val.(float64)
+	if str_ok {
+		L.PushString (str)
+	}else if int_ok {
+		L.PushInteger (int(in))
+	}else if float_ok {
+		L.PushNumber (fl)
+	}else {
+		w := L.newWrapper()
+		w.v = val
+		w.pointer = 0
+		
+		if reflect.ValueOf(val).Kind() == reflect.Ptr {
+			w.pointer = 1
+		}
+		//	debug (val)
+		//	w.name = "Test"
+		w.isFunction = 0
+		var k reflect.Kind
+		var sType reflect.Type
+		
+		if w.pointer == 1 {
+			//		debug ("Pointer ....")
+			k = reflect.ValueOf(val).Elem().Kind()
+			sType = reflect.ValueOf(val).Elem().Type()
+		} else {
+			//		debug ("Not Pointer")
+			k = reflect.ValueOf(val).Kind()
+			sType = reflect.ValueOf(val).Type()
+		}
+		w.obj_type = k
+		debug(" Kind is " + k.String())
+		if (k != reflect.Slice) && (k != reflect.Struct) && (k != reflect.Map) {
+			panic("The pushed interface can only be a Slice, Map or Struct")
+		}
+		//	debug ("---------------")
+		//	debug (reflect.ValueOf(&w).Pointer())
+		//	C.pushObject(L.s, unsafe.Pointer(&w))
+		if (k == reflect.Struct ) {
+			w.name = sType.Name()
+			build_struct_map (sType)
+		}
+	//	L.obj_table = append(L.obj_table, val)
+		C.pushObject(L.s,  C.longlong(w.id), 1)
 	//	debug (w.pointer)
+	}
 }
 
 func (L *State) pushFunction(f GOLuaFunction) {
@@ -419,7 +439,6 @@ func (L *State) ToBoolean(index int) bool {
 
 func (L *State) ToString(index int) string {
 	str := C.toString(L.s, C.int(index))
-//	defer C.free(unsafe.Pointer(str))
 	return C.GoString(str)
 }
 
@@ -454,26 +473,27 @@ func (L *State) Typename(tp int) string {
 
 func (L *State) SetField(index int, k string) {
 	cstr := C.CString(k)
-	defer C.free(unsafe.Pointer(cstr))
 	C.lua_setfield(L.s, C.int(index), cstr)
+	C.free(unsafe.Pointer(cstr))
 }
 
 func (L *State) GetField(index int, k string) {
 	cstr := C.CString(k)
-	defer C.free(unsafe.Pointer(cstr))
 	C.lua_getfield(L.s, C.int(index), cstr)
+	C.free(unsafe.Pointer(cstr))
 }
 
 func (L *State) SetGlobal(name string) {
 	cstr := C.CString(name)
-	defer C.free(unsafe.Pointer(cstr))
 	C.lua_setglobal(L.s, cstr)
+	C.free(unsafe.Pointer(cstr))
 }
 
 func (L *State) GetGlobal(name string) int {
 	cstr := C.CString(name)
-	defer C.free(unsafe.Pointer(cstr))
-	return int(C.lua_getglobal(L.s, cstr))
+	i := int(C.lua_getglobal(L.s, cstr))
+	C.free(unsafe.Pointer(cstr))
+	return i
 }
 
 func (L *State) SetMetaTable(index int) {
@@ -525,17 +545,21 @@ func (L *State ) ReadFormTable( reader LuaTableReader, idx int) error {
 } 
 
 // Loading the chunk
-func (L *State) LoadCodeString(code string) error {
+func (L *State) LoadCodeString(code string, name string) error {
 	cstr := C.CString(code)
-	defer C.free(unsafe.Pointer(cstr))
-
-	err := int(C.loadCodeSegment(L.s, cstr))
-
+    cname := C.CString(name)
+	err := int(C.loadCodeSegment(L.s, cstr,cname))
+    
+    C.free(unsafe.Pointer(cstr))
+    C.free(unsafe.Pointer(cname))
+     
 	if err != 0 {
 		e := new(luaError)
 		e.errStr = L.ToString(-1)
 		L.Pop(1) /* pop error message from the stack */
 		return e
+	}else {
+		return L.PCall(0, 0)
 	}
 	return nil
 }
@@ -886,11 +910,14 @@ func go_callback_method(id int64, go_sate unsafe.Pointer) C.int {
 	p := temState.obj_table[id]
 	if p.isFunction == 1 {
 		f := p.v.(GOLuaFunction)
-//		fmt.Printf("%d : %v ", p.id, )
+		debug("f : ")
+		debug(f)
+		debug("\n")
 		ret = f.Invoke(temState)
-		a,ok := f.(*methodInvoker)
+		a,ok := f.(*methodInvoker) // Methods invoked does not need to stay in memory
 		if ok {
-			fmt.Printf("%d : %v \n", p.id, a.method )
+//			fmt.Printf("%d : %v \n", p.id, a.method )
+			a.value = nil	
 			delete(temState.obj_table, p.id)
 		}
 	}
@@ -1060,13 +1087,13 @@ func go_callback_ipairs (id int64, go_sate unsafe.Pointer) C.int {
 
 //export go_cleanup
 func go_cleanup (id int64, go_sate unsafe.Pointer) {
-	//fmt.Printf("Removing id %d \n",(id))
+//	fmt.Printf("Removing id %d \n",(id))
 	temState := (*State)(go_sate)
 	temState.SetTop(0)
 	p := temState.obj_table[id]
 	if p != nil {
 		
-		fmt.Printf("Removing 2 id  %d : %v \n",(id), p.v)
+//		fmt.Printf("Removing 2 id  %d : %v \n",(id), p.v)
 		delete(temState.obj_table, id)
 		p.v = nil
 	}
