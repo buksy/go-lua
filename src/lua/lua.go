@@ -662,8 +662,12 @@ func goToLua(L *State, val reflect.Value) {
 		}
 	case reflect.Slice, reflect.Map, reflect.Struct:
 		{
-			debug(" Pushing " + kind.String())
-			L.PushInterface(val.Interface())
+			if (!val.IsNil()) {
+				debug(" Pushing " + kind.String())
+				L.PushInterface(val.Interface())
+			} else {
+				L.PushNil()
+			}
 		}
 
 	default:

@@ -184,7 +184,7 @@ func do_work(a int) {
 		//			m["test3"] = 4
 					t.Map = m
 					
-					t.TS = new (TestStruct)
+					t.TS = nil
 					
 					L.PushInterface(t)
 					
